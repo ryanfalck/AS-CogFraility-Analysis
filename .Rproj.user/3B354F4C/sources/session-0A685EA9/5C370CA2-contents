@@ -1,0 +1,720 @@
+---
+title: "AS! Treatment Effects JAMA Final Copy"
+author: "John Best"
+date: '2019-05-22'
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Import and prep data
+
+```{r,message=FALSE,echo=FALSE}
+
+setwd("~/Library/Mobile Documents/com~apple~CloudDocs/Action Seniors/JAMA Final Analysis Docs")
+
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(MASS,readxl,mediation,plyr,sandwich,ggplot2,lme4,lmerTest,rpart,survival,fmsb)
+
+Assignment_and_falls_Jan2019 <- read_excel("~/Library/Mobile Documents/com~apple~CloudDocs/Action Seniors/JAMA Final Analysis Docs/AS_Final Falls Data_for JAMA revisions v2_Feb 13 2019.xlsx")
+Geri<-read_excel("~/Library/Mobile Documents/com~apple~CloudDocs/Action Seniors/JAMA Final Analysis Docs/AS Geri_July 30 2018.xlsx")
+data1<-merge(data.frame(Assignment_and_falls_Jan2019[c(1:3,7:16)]),Geri,by="ID",all=TRUE)
+data1<-rename(data1,c("Exposure.to.1st.Fall"="Timetofirst","Total.Exposure"="Total_Exposure","Total.Falls"="Total_Falls"))
+data1$Gender<-data1$Gender-1
+
+
+data1$Group_r[data1$Group==0]<-1
+data1$Group_r[data1$Group==1]<-0
+
+data1$Geri<-as.factor(data1$Geri)
+data1$Geri<-relevel(data1$Geri,"LD")
+
+data1$exclude<-0
+data1$exclude[data1$ID==330]<-1
+
+```
+
+##Negative binomial analysis of treatment effects on falls count - use LL and UL for the 95% CI
+
+```{r, message=FALSE, echo=FALSE}
+mdl.nb<-glm.nb(Total_Falls~Group+scale(Gender,scale=FALSE)+offset(log(Total_Exposure/365)),subset(data1,exclude==0)) 
+print(summary(mdl.nb))
+SE<-sqrt(diag(vcovHC(mdl.nb,"HC1")))
+p=2*pnorm(-abs(coef(mdl.nb)/SE))
+print(cbind(coef(mdl.nb),SE,p))
+est<-cbind(Estimate=coef(mdl.nb),LL=coef(mdl.nb)-1.96*SE,UL=coef(mdl.nb)+1.96*SE)
+exp_group<-exp(est)
+print("Use these estimates and LL and UL for the 95% CI");exp_group
+```
+
+## Compute incide rate difference and 95% CI - between groups absolute difference - G-computation with bootstrapping, also bootstrapping of initial model
+
+```{r,message=FALSE,echo=FALSE}
+set.seed(123)
+library(boot)
+
+diff<-function(x,i){
+  temp<-v1<-v2<-x[i,]
+  v1$Group<-1
+  v2$Group<-0
+  model<-glm.nb(Total_Falls~Group+Gender+offset(log(Total_Exposure/365)),subset(temp,exclude==0))
+  predict(model,v1,type="response")-predict(model,v2,type="response")
+}
+
+b<-boot(subset(data1,exclude==0),diff,R=5e3,parallel="multicore",ncpus=8)
+print("Mean estimate");mean(b$t)
+print("2.5%tile,50%tile,97.5%tile");quantile(b$t,c(.025,.5,.975))
+plot(b)
+```
+
+## Compute incide rate ratio and 95% CI - between groups relative difference - G-computation with bootstrapping, also bootstrapping of initial model
+
+```{r,message=FALSE,echo=FALSE}
+set.seed(123)
+library(boot)
+
+IRR<-function(x,i){
+  temp<-v1<-v2<-x[i,]
+  v1$Group<-1
+  v2$Group<-0
+  model<-glm.nb(Total_Falls~Group+Gender+offset(log(Total_Exposure/365)),subset(temp,exclude==0))
+  predict(model,v1,type="response")/predict(model,v2,type="response")
+}
+
+b<-boot(subset(data1,exclude==0),IRR,R=5e3,parallel="multicore",ncpus=8)
+print("Mean estimate");mean(b$t);sd(b$t)
+print("2.5%tile,50%tile,97.5%tile");quantile(b$t,c(.025,.5,.975))
+plot(b)
+```
+
+## Survival analysis: Exposure to first fall
+
+```{r, message=FALSE, echo=FALSE}
+library(survival)
+data1$status[data1$Total_Falls==0]<-0
+data1$status[data1$Total_Falls>=1]<-1
+
+
+Cox.mdl<-coxph(Surv(Timetofirst,status)~ Group + Gender,subset(data1,exclude==0),robust=TRUE)
+print("Output form Cox model which contains hazard ratio");summary(Cox.mdl)
+print("Test of proportional hazards assumption");cox.zph(Cox.mdl,transform="rank") #test of proportional hazards
+
+print("Alternative approaches to calculating survival differences")
+KM.mdl<-survfit(Surv(Timetofirst,status)~Group+Gender,type="kaplan-meier",conf.type="log",subset(data1,exclude==0))
+print(KM.mdl)
+survdiff(Surv(Timetofirst,status==1)~Group + Gender,subset(data1,exclude==0))
+```
+
+## Plot survival curves using ggplot - time to first fall
+
+```{r, message=FALSE,echo=FALSE}
+library(ggplot2)
+library(survminer)
+library(survival)
+
+Cox.mdl<-coxph(Surv(Timetofirst,status)~ strata(Group) + Gender,subset(data1,exclude==0),robust=TRUE)
+
+fit<-survfit(Surv(Timetofirst,status)~Group_r,type="kaplan-meier",conf.type="log",subset(data1,exclude==0))
+firstfallplot<-ggsurvplot(fit,data=subset(data1,exclude==0),risk.table = TRUE,xlab="Time from baseline, days",break.time.by=20,legend.labs=c("Exercise","Usual Care"),palette=c("#56B4E9","#E69F00"),risk.table.height=0.25,ggtheme=theme_bw(base_size=14),fun="event",xlim=c(0,350),ylab="Proportion of patients\nwith a first fall")
+
+print(firstfallplot)
+
+```
+
+## Exposure to second fall analysis - set up data
+
+```{r, message=FALSE, echo=FALSE}
+
+library(dplyr)
+
+Second_falls<-read_excel("Exposure to Second fall.xlsx")
+data_2ndfall<-merge(Second_falls[-c(3)],data1[c(1,3,5,17)],by="ID")
+data_2ndfall$event2nd<-1
+data_2ndfall$event2nd[data_2ndfall$`Exposure to second fall (from baseline)`=="No Fall"]<-0
+data_2ndfall$event2ndfrom1st<-1
+data_2ndfall$event2ndfrom1st[data_2ndfall$`Exposure to second fall (from first fall)`=="No Fall"]<-0
+
+data_2ndfall$timetosecond<-as.numeric(data_2ndfall$`Exposure to second fall (from baseline)`)
+data_2ndfall$timetosecond[is.na(data_2ndfall$timetosecond)]<-data_2ndfall$Total_Exposure[is.na(data_2ndfall$timetosecond)]
+
+data_2ndfall$timetosecondfromfirst<-as.numeric(data_2ndfall$`Exposure to second fall (from first fall)`)
+data_2ndfall$timetosecondfromfirst[is.na(data_2ndfall$timetosecondfromfirst)]<-data_2ndfall$Total_Exposure[is.na(data_2ndfall$timetosecondfromfirst)]
+data_2ndfall<-left_join(data_2ndfall,data1[c(1,18)],by="ID")
+```
+
+## Survival analysis: Exposure to 2nd fall
+
+```{r, message=FALSE, echo=FALSE}
+library(survival)
+
+Cox.mdl<-coxph(Surv(timetosecondfromfirst,event2nd==1)~ Group + Gender,subset(data_2ndfall,exclude==0&status==1),robust=TRUE)
+print("Output form Cox model which contains hazard ratio");summary(Cox.mdl)
+print("Test of proportional hazards assumption");cox.zph(Cox.mdl,transform="rank") #test of proportional hazards
+
+print("Alternative approaches to calculating survival differences")
+KM.mdl<-survfit(Surv(timetosecondfromfirst,event2nd==1)~Group+Gender,type="kaplan-meier",conf.type="log-log",subset(data_2ndfall,exclude==0&status==1))
+print(KM.mdl)
+survdiff(Surv(timetosecondfromfirst,event2nd==1)~Group + Gender,subset(data_2ndfall,exclude==0&status==1))
+```
+
+## Plot surival curves - time to 2nd fall using ggplot
+
+```{r, message=FALSE,echo=FALSE}
+library(ggplot2)
+library(survminer)
+library(survival)
+
+data_2ndfall$Group_r[data_2ndfall$Group==0]<-1
+data_2ndfall$Group_r[data_2ndfall$Group==1]<-0
+
+fit<-survfit(Surv(timetosecondfromfirst,event2nd)~Group_r,type="kaplan-meier",conf.type="log",subset(data_2ndfall,exclude==0&status==1))
+secondfallplot<-ggsurvplot(fit,data=subset(data_2ndfall,exclude==0),risk.table = TRUE,xlab="Time from first fall, days",break.time.by=30,legend.labs=c("Exercise","Usual Care"),palette=c("#56B4E9","#E69F00"),risk.table.height=0.25,ggtheme=theme_bw(base_size=14),fun="event",xlim=c(0,360),ylab="Proportion of patients\nwith a second fall")
+
+print(secondfallplot)
+
+```
+
+## Here's how many people each month have contributed falls data -- Needed for Figure 2
+
+```{r, message=FALSE, echo=FALSE}
+
+Monthly_falls <- read_excel("~/Library/Mobile Documents/com~apple~CloudDocs/Action Seniors/JAMA Final Analysis Docs/AS_Monthly falls_Mar 20 2019.xlsx")
+
+data1c<-merge(data1,Monthly_falls,by="ID",all=TRUE)
+data1c<-subset(data1c,ID!=330)
+
+data1c<-plyr::rename(data1c,c("Month_1_Cumulative"="MonthCumulative_1","Month_2_Cumulative"="MonthCumulative_2","Month_3_Cumulative"="MonthCumulative_3",
+                        "Month_4_Cumulative"="MonthCumulative_4","Month_5_Cumulative"="MonthCumulative_5","Month_6_Cumulative"="MonthCumulative_6",
+                        "Month_7_Cumulative"="MonthCumulative_7","Month_8_Cumulative"="MonthCumulative_8","Month_9_Cumulative"="MonthCumulative_9",
+                        "Month_10_Cumulative"="MonthCumulative_10","Month_11_Cumulative"="MonthCumulative_11","Month_12_Cumulative"="MonthCumulative_12",
+                        "Month_13_Cumulative"="MonthCumulative_13"))
+data1c_CON<-subset(data1c,Group==0)
+data1c_EX<-subset(data1c,Group==1)
+print("Usual Care");apply(data1c_CON[c(19:31)], 2, function(x) length(which(!is.na(x)))) #count people with falls data
+print("Otago Group");apply(data1c_EX[c(19:31)], 2, function(x) length(which(!is.na(x)))) #count people with falls data
+
+data1c.stacked<-reshape(data1c,idvar="ID",varying=c(19:44),direction="long",sep="_")
+data1c.stacked$time<-data1c.stacked$time-1
+
+Fallsmeans<-data.frame(aggregate(MonthCumulative~Group+time,data1c.stacked,sum))
+Fallsmeans$Tx[Fallsmeans$Group==0]<-"CON"
+Fallsmeans$Tx[Fallsmeans$Group==1]<-"EX"
+```
+
+## Create risk table for accumulation of falls
+
+```{r,echo=FALSE,message=FALSE}
+library(dplyr)
+
+Falls<-data.frame(aggregate(as.numeric(MonthCumulative)~Group+time,data1c.stacked,sum))
+
+strata<-rep("Group_r=0",14)
+time<-seq(from=0,to=13,by=1)
+n.risk<-apply(data1c_EX[c(19:31)], 2, function(x) length(which(!is.na(x))))
+n.risk<-c(172,n.risk)
+pct.risk<-apply(data1c_EX[c(19:31)], 2, function(x) (length(which(!is.na(x)))/172)*100)
+pct.risk<-c(100,pct.risk)
+n.event<-Falls$as.numeric.Month.[Falls$Group==1]
+n.event<-c(0,n.event)
+cum.n.event<-Fallsmeans$MonthCumulative[Fallsmeans$Group==1]
+cum.n.event<-c(0,cum.n.event)
+n.censor<-rep(0,14)
+cum.n.censor<-rep(0,14)
+strata_size<-rep(172,14)
+Group_r<-rep(0,14)
+EX_table<-data.frame(strata,time,n.risk,pct.risk,n.event,cum.n.event,n.censor,cum.n.censor,strata_size,Group_r)
+
+strata<-rep("Group_r=1",14)
+time<-seq(from=0,to=13,by=1)
+n.risk<-apply(data1c_CON[c(19:31)], 2, function(x) length(which(!is.na(x))))
+n.risk<-c(172,n.risk)
+pct.risk<-apply(data1c_CON[c(19:31)], 2, function(x) (length(which(!is.na(x)))/172)*100)
+pct.risk<-c(100,pct.risk)
+n.event<-Falls$as.numeric.Month.[Falls$Group==0]
+n.event<-c(0,n.event)
+cum.n.event<-Fallsmeans$MonthCumulative[Fallsmeans$Group==0]
+cum.n.event<-c(0,cum.n.event)
+n.censor<-rep(0,14)
+cum.n.censor<-rep(0,14)
+strata_size<-rep(172,14)
+Group_r<-rep(1,14)
+CON_table<-data.frame(strata,time,n.risk,pct.risk,n.event,cum.n.event,n.censor,cum.n.censor,strata_size,Group_r)
+
+table<-bind_rows(EX_table,CON_table)
+obs_table<-ggrisktable(table,xlab="Month",ylab="Group",risk.table.title="Number of observations",break.time.by=1,legend.labs=c("Exercise","Usual Care"),palette=c("#56B4E9","#E69F00"),risk.table.height=0.25,ggtheme=theme_bw(base_size=14))
+```
+
+## Here is a plot showing the accumulation of falls in the treatment and control groups.
+
+```{r, echo=FALSE,message=FALSE}
+Fallsmeans$Time<-Fallsmeans$time+1
+Update<-data.frame(Group=c(0,1),time=c(NA,NA),MonthCumulative=c(0,0),Tx=c("CON","EX"),Time=c(0,0))
+Fallsmeans<-bind_rows(Fallsmeans,Update)
+Falls_monthly<-ggplot(Fallsmeans,aes(y=MonthCumulative,x=Time,group=Tx,colour=Tx)) + geom_line(size=1) +ylab('Cumulative falls') + xlab("Time since baseline, months")+
+  theme_bw(base_size=14)+scale_x_continuous(breaks=c(0,2,4,6,8,10,12)) + scale_colour_manual(name="Group",breaks=c("EX","CON"),labels=c("Exercise","Usual Care"),values=c("#E69F00","#56B4E9"))
+
+Falls_monthly
+#ggsave(Falls_monthly,file="Fig2A_Falls_monthly.eps",device="eps")
+#ggsave(Falls_monthly,file="Fig2A_Falls_monthly.pdf")
+```
+
+## Prepare clinical data
+
+```{r, message=FALSE, echo=FALSE}
+library(dplyr)
+setwd("~/Library/Mobile Documents/com~apple~CloudDocs/Action Seniors/JAMA Final Analysis Docs")
+Clinical_data <- read_excel("AS!_Part_3_Clinical_Export_Feb 14, 2019.xlsx")
+Clinical_data$ID<-gsub("AS!_Part3_","",Clinical_data$ID_Number)
+Clinical_data<- Clinical_data %>% mutate(Time = recode(Timepoint,"T1 - In Person"=0,"T7 - Phone"=6,"T13"=12))
+
+data2<-Clinical_data[c(50:51,3:49)]
+data2$ID<-as.numeric(data2$ID)
+
+data2$Timefactor<-NA
+data2$Timefactor[data2$Time==0]<-"Baseline"
+data2$Timefactor[data2$Time==5|data2$Time==6]<-"Midpoint"
+data2$Timefactor[data2$Time==11|data2$Time==12]<-"Final"
+
+
+Fluency <- read_excel("~/Library/Mobile Documents/com~apple~CloudDocs/Action Seniors/JAMA Final Analysis Docs/AS!_Part_3_Clinical_Export_Feb 14, 2019.xlsx", sheet = "Verbal-Animal Fluency")
+Fluency$ID<-gsub("AS!_Part3_","",Fluency$`ID Number`)
+Fluency<- Fluency %>% mutate(Time = recode(Fluency$`Assessment Period`,"T1 - In Person"=0,"T1"=0,"T7 - Phone"=6,"T13"=12,"T12 - In Person (1 Year)"=12))
+Fluency_v2<-Fluency %>% group_by(ID) %>% summarise_all(funs(first(na.omit(.)))) #remove duplicate rows
+data3<-Fluency_v2[c(1,9,5:8)]
+data3$FAS<-data3$F+data3$A+data3$S
+data3$ID<-as.numeric(data3$ID)
+ 
+data3$Timefactor<-NA
+data3$Timefactor[data3$Time==0]<-"Baseline"
+data3$Timefactor[data3$Time==5|data3$Time==6]<-"Midpoint"
+data3$Timefactor[data3$Time==11|data3$Time==12]<-"Final"
+ 
+data4<-merge(data1,data2,by="ID",all=TRUE)
+data5<-merge(data4,data3,by=c("ID","Timefactor"),all=TRUE)
+ 
+data5$Tx<-data5$Group
+data5$Tx[is.na(data5$Group)&data5$Otago==0]<-"Interview"
+data5$Tx[is.na(data5$Group)&data5$Otago==1]<-"Otago"
+ 
+data5$Sex<-NA
+data5$Sex[data5$Gender==0]<--.5
+data5$Sex[data5$Gender==1]<-.5
+data5$Time<-(data5$Time.x)/12
+ 
+spaceless <- function(x) {colnames(x) <- gsub(" ", "_", colnames(x));x}
+data5 <- spaceless(data5)
+ 
+data5$NIA_Walking_Time<-as.numeric(data5$NIA_Walking_Time)
+data5$NIA_Sit_to_Stand_Time<-as.numeric(data5$NIA_Sit_to_Stand_Time)
+data5$Trail_A<-as.numeric(data5$Trail_A)
+data5$Trail_B<-as.numeric(data5$Trail_B)
+data5$Stroop_1<-as.numeric(data5$Stroop_1)
+data5$Stroop_2<-as.numeric(data5$Stroop_2)
+data5$Stroop_3<-as.numeric(data5$Stroop_3)
+data5$Gaitspeed<-4/data5$NIA_Walking_Time
+ 
+```
+
+## Create tables with descriptive statistics
+
+```{r}
+library(tableone)
+vars<-dput(names(data5[c(21,26,27,3,40,41,37,36,6,7)]))
+factorVars<-dput(names(data5[c(3, 6, 9:11, 20)]))
+Table1_reduced<-CreateTableOne(vars=vars,strata="Group",data=subset(data5,Time==0),factorVars=factorVars)
+print(Table1_reduced,exact=factorVars,contDigits=1,missing=TRUE,quote=TRUE)
+
+```
+
+## Compute means and SDs for Table 2
+
+```{r}
+library(tableone)
+temp<-subset(data5,Time!=0.5)
+temp$TrailsBA<-temp$Trail_B-temp$Trail_A
+temp$Stroop32<-temp$Stroop_3-temp$Stroop_2
+vars<-dput(names(temp[c(28,59,65,58,78,79,56,57)]))
+Table1_reduced<-CreateTableOne(vars=vars,strata=c("Time","Group_r"),data=temp)
+print(Table1_reduced,exact=factorVars,contDigits=2,missing=FALSE,quote=FALSE,test=FALSE,nonnormal=vars)
+
+```
+
+## CREATE FUNCTION FOR LINEAR MIXED MODELS WITH RANDOM INTERCEPTS AND SLOPES
+
+```{r}
+lmm.mdl<-function(y,data){
+  library(pbkrtest)
+  mdl<-lmer(y ~ Group*factor(Time)+Sex*factor(Time)+(1+Time|ID),data=data)
+  #conf<-confint(mdl,method="profile")
+  #est<-cbind(Estimate=coef(summary(mdl))[,1],conf[5:13,],p=coef(summary(mdl))[,5])
+  return(summary(mdl,ddf="Kenward-Roger"))
+  #return(round(est,3))
+}
+lmm.mdl_r<-function(y,data){
+   mdl<-lmer(y ~ Group_r*factor(Time)+Sex*factor(Time)+(1+Time|ID),data=data)
+   #conf<-confint(mdl,method="profile")
+   #est<-cbind(Estimate=coef(summary(mdl))[,1],conf[5:13,],p=coef(summary(mdl))[,5])
+   #return(round(est,3))
+}
+```
+## LMM of cognitive outcomes
+
+#DSST Results
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+data5a<-subset(data5,ID!=330)
+lmm.mdl(data5a$DSST,data5a)
+lmm.mdl_r(data5a$DSST,data5a)
+plot(lmer(DSST~Group*factor(Time)+Sex*factor(Time)+(1+Time|ID),data=data5a))
+hist(resid(lmer(DSST~Group*factor(Time)+Sex*factor(Time)+(1+Time|ID),data=data5a)))
+```
+##Stroop Int Results
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+data5a<-subset(data5,ID!=330)
+lmm.mdl((data5a$Stroop_3-data5a$Stroop_2),data5a)
+lmm.mdl_r((data5a$Stroop_3-data5a$Stroop_2),data5a)
+plot(lmer((Stroop_3-Stroop_2)~Group*factor(Time)+Sex*factor(Time)+(1+Time|ID),data=data5a))
+hist(resid(lmer((Stroop_3-Stroop_2)~Group*factor(Time)+Sex*factor(Time)+(1+Time|ID),data=data5a)))
+```
+
+#Trails B-A Results
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+data5a<-subset(data5,ID!=330)
+lmm.mdl((data5a$Trail_B-data5a$Trail_A),data5a)
+lmm.mdl_r((data5a$Trail_B-data5a$Trail_A),data5a)
+plot(lmer((Trail_B-Trail_A)~Group*factor(Time)+Sex*factor(Time)+(1+Time|ID),data=data5a))
+hist(resid(lmer((Trail_B-Trail_A)~Group*factor(Time)+Sex*factor(Time)+(1+Time|ID),data=data5a)))
+```
+
+#DIGITS FORWARD
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+data5a<-subset(data5,ID!=330)
+lmm.mdl(data5a$Digit_F,data5a)
+lmm.mdl_r(data5a$Digit_F,data5a)
+```
+
+#DIGITS BACKWARD
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+data5a<-subset(data5,ID!=330)
+lmm.mdl(data5a$Digit_B,data5a)
+lmm.mdl_r(data5a$Digit_B,data5a)
+```
+
+##PHYSICAL OUTCOMES
+
+#PPA
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+data5a<-subset(data5,ID!=330)
+lmm.mdl(data5a$PPA,data5a)
+lmm.mdl_r(data5a$PPA,data5a)
+```
+
+#SPPB
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+data5a<-subset(data5,ID!=330)
+lmm.mdl(data5a$NIA_Total_Score,data5a)
+lmm.mdl_r(data5a$NIA_Total_Score,data5a)
+```
+
+#Mean TUG Results
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+data5a<-subset(data5,ID!=330)
+lmm.mdl(data5a$Mean_TUG,data5a)
+lmm.mdl_r(data5a$Mean_TUG,data5a)
+```
+
+##MEDIATION ANALYSES
+#First, extract random DSST slopes and merge with other variables for further analysis
+```{r,echo=FALSE}
+data5a<-subset(data5,ID!=330)
+DSST.LMER<-lmer(DSST~Time+(1+Time|ID),data5a)
+coef.DSST.LMER<-coef(DSST.LMER)$ID
+coef.DSST.LMER<-as.data.frame(coef.DSST.LMER)
+coef.DSST.LMER$ID<-rownames(coef.DSST.LMER)
+coef.DSST.LMER$DSSTslope<-coef.DSST.LMER$Time
+coef.DSST.LMER$DSSTint<-coef.DSST.LMER$`(Intercept)`
+coef.DSST.LMER$`(Intercept)`<-coef.DSST.LMER$Time<-NULL
+
+data6<-merge(data1,coef.DSST.LMER,by="ID",all=TRUE)
+data6$Sex<-NA
+data6$Sex[data6$Gender==0]<--.5
+data6$Sex[data6$Gender==1]<-.5
+data6$Tx<-data6$Group
+data6$Group[data6$Tx==0]<-"Interview"
+data6$Group[data6$Tx==1]<-"Otago"
+
+```
+#Next, create models on the mediator (DSST) and the outcome (Falls). GLMER is not compatible with the mediation model; therefore, single level NB is used -- this has neglible effects of the coefficients.Furthermore, Geri had to be dropped because one Geri only had 1 participant.
+
+```{r,echo=FALSE}
+med.fit<-lm(DSSTslope~Group+Sex,subset(data6,DSSTslope!="NA"&Total_Falls!="NA"))
+
+
+out.fit<-glm.nb(Total_Falls~Group+Sex+DSSTslope,subset(data6,DSSTslope!="NA"&Total_Falls!="NA"))
+
+
+mdl.nb<-glm.nb(Total_Falls~Group+Sex+offset(log(Total_Exposure/365)),subset(data6,DSSTslope!="NA"))
+SE<-sqrt(diag(vcovHC(mdl.nb,"HC1")))
+p=round(2*pnorm(-abs(coef(mdl.nb)/SE)),4)
+print(cbind(coef(mdl.nb),SE,p))
+est<-cbind(Estimate=coef(mdl.nb),confint(mdl.nb),LL=coef(mdl.nb)-1.96*SE,UL=coef(mdl.nb)+1.96*SE)
+exp(est)
+mdl.nb<-glm.nb(Total_Falls~Group+Sex+scale(DSSTslope)+offset(log(Total_Exposure/365)),subset(data6,DSSTslope!="NA"))
+SE<-sqrt(diag(vcovHC(mdl.nb,"HC1")))
+p=round(2*pnorm(-abs(coef(mdl.nb)/SE)),4)
+print(cbind(coef(mdl.nb),SE,p))
+est<-cbind(Estimate=coef(mdl.nb),confint(mdl.nb),LL=coef(mdl.nb)-1.96*SE,UL=coef(mdl.nb)+1.96*SE)
+exp(est)
+```
+#Conduct mediation analysis.
+```{r, echo=FALSE}
+library(mediation)
+set.seed(123)
+med.out<-mediate(med.fit,out.fit,treat="Group",mediator="DSSTslope",covariates=c("Sex"),boot=TRUE,sims=5000,control.value="Interview",treat.value="Otago")
+summary(med.out)
+```
+
+##Calculate fractures rate per group
+
+```{r}
+library(readxl)
+Fall_fracs<-read_excel("AS Fractures_Feb 15 2019.xlsx",sheet="Fx due to fall")[c(1,3)]
+
+Fall_fracs_v2<-left_join(data1,Fall_fracs,by="ID")
+Fall_fracs_v2$Fractures[is.na(Fall_fracs_v2$Fractures)]<-0
+
+mean(Fall_fracs_v2$Fractures[Fall_fracs_v2$Group==1&Fall_fracs_v2$exclude==0]/(Fall_fracs_v2$Total_Exposure[Fall_fracs_v2$Group==1&Fall_fracs_v2$exclude==0]/365.25),na.rm=TRUE)
+mean(Fall_fracs_v2$Fractures[Fall_fracs_v2$Group==0&Fall_fracs_v2$exclude==0]/(Fall_fracs_v2$Total_Exposure[Fall_fracs_v2$Group==0&Fall_fracs_v2$exclude==0]/365.25),na.rm=TRUE)
+sd(Fall_fracs_v2$Fractures[Fall_fracs_v2$Group==1&Fall_fracs_v2$exclude==0]/(Fall_fracs_v2$Total_Exposure[Fall_fracs_v2$Group==1&Fall_fracs_v2$exclude==0]/365.25),na.rm=TRUE)
+sd(Fall_fracs_v2$Fractures[Fall_fracs_v2$Group==0&Fall_fracs_v2$exclude==0]/(Fall_fracs_v2$Total_Exposure[Fall_fracs_v2$Group==0&Fall_fracs_v2$exclude==0]/365.25),na.rm=TRUE)
+
+Total_fracs<-read_excel("AS Fractures_Feb 15 2019.xlsx",sheet="All Fx Observed")[c(1,3)]
+
+Total_fracs_v2<-left_join(data1,Total_fracs,by="ID")
+Total_fracs_v2$Fractures[is.na(Total_fracs_v2$Fractures)]<-0
+
+mean(Total_fracs_v2$Fractures[Total_fracs_v2$Group==1&Total_fracs_v2$exclude==0]/(Total_fracs_v2$Total_Exposure[Total_fracs_v2$Group==1&Total_fracs_v2$exclude==0]/365.25),na.rm=TRUE)
+mean(Total_fracs_v2$Fractures[Total_fracs_v2$Group==0&Total_fracs_v2$exclude==0]/(Total_fracs_v2$Total_Exposure[Total_fracs_v2$Group==0&Total_fracs_v2$exclude==0]/365.25),na.rm=TRUE)
+sd(Total_fracs_v2$Fractures[Total_fracs_v2$Group==1&Total_fracs_v2$exclude==0]/(Total_fracs_v2$Total_Exposure[Total_fracs_v2$Group==1&Total_fracs_v2$exclude==0]/365.25),na.rm=TRUE)
+sd(Total_fracs_v2$Fractures[Total_fracs_v2$Group==0&Total_fracs_v2$exclude==0]/(Total_fracs_v2$Total_Exposure[Total_fracs_v2$Group==0&Total_fracs_v2$exclude==0]/365.25),na.rm=TRUE)
+
+
+Exposure_EX<-mean(data1$Total_Exposure[data1$Group==1&data1$exclude==0],na.rm=TRUE)/365.25
+Exposure_CON<-mean(data1$Total_Exposure[data1$Group==0&data1$exclude==0],na.rm=TRUE)/365.25
+Falls_EX<-mean(data1$Total_Falls[data1$Group==1&data1$exclude==0],na.rm=TRUE)
+Falls_CON<-mean(data1$Total_Falls[data1$Group==0&data1$exclude==0],na.rm=TRUE)
+Total_fracs_EX<-15/172
+Total_fracs_CON<-12/172
+Falls_fracs_EX<-15/172
+Falls_fracs_CON<-15/172
+
+Total_fracs_EX/Exposure_EX
+Total_fracs_CON/Exposure_CON
+Falls_fracs_EX/Exposure_EX
+Falls_fracs_CON/Exposure_CON
+
+Falls_EX/Exposure_EX
+Falls_CON/Exposure_CON
+
+sd(data1$Total_Falls[data1$Group==0]/(data1$Total_Exposure[data1$Group==0]/365.25))
+```
+
+Negantive binomial regression analysis of fractures
+
+```{r, message=FALSE, echo=FALSE}
+mdl.nb<-glm.nb(Fractures~Group+scale(Gender,scale=FALSE)+offset(log(Total_Exposure/365)),subset(Fall_fracs_v2,exclude==0)) 
+mdl.pois<-glm(Fractures~Group+scale(Gender,scale=FALSE)+offset(log(Total_Exposure/365)),subset(Fall_fracs_v2,exclude==0),family="poisson") 
+summary(mdl.nb)
+SE<-sqrt(diag(vcovHC(mdl.nb,"HC1")))
+p=2*pnorm(-abs(coef(mdl.nb)/SE))
+print(cbind(coef(mdl.nb),SE,p))
+est<-cbind(Estimate=coef(mdl.nb),confint(mdl.nb),LL=coef(mdl.nb)-1.96*SE,UL=coef(mdl.nb)+1.96*SE)
+exp_group<-exp(est)
+print("Use these estimates and LL and UL for the 95% CI");exp_group
+```
+
+Multiple Imputation
+
+```{r,message=FALSE,echo=FALSE,warning=FALSE}
+library(mice)
+library(tidyr)
+set.seed(123)
+
+data5_abbr<-data5[c(1,75:76,4:7,21:25,27:28,36,38:41,50:51,53:59,65,72:73,77)]
+
+data5_wide <- reshape(data5_abbr, idvar="ID",timevar="Time",direction="wide")
+data5_wide_abbr<-data5_wide[c(1:9,13:31,73:74,79:88,91,43:44,47:58,61)]
+
+data7<-full_join(data5_wide_abbr,Monthly_falls[c(1:14)],by="ID")
+data7<-subset(data7,ID!=330)
+
+data7[c(57:69)]<-lapply(data7[c(57:69)],as.numeric)
+
+ini<-mice(data7,maxit=0)
+meth<-ini$meth
+meth[c("Month_1","Month_2","Month_3","Month_4","Month_5","Month_6","Month_7","Month_8","Month_9","Month_10","Month_11","Month_12","Month_13")]<-"pmm"
+
+post<-ini$post
+post[c("Month_1","Month_2","Month_3","Month_4","Month_5","Month_6","Month_7","Month_8","Month_9","Month_10","Month_11","Month_12","Month_13")]<-"imp[[j]][, i] <- squeeze(imp[[j]][,i],c(0,10))"
+
+data7.imp<-mice(data7,m=40,maxit=40,pred=quickpred(data7,exclude=c("ID","Timetofirst.0","Total_Exposure.0","Total_Falls.0")),print=FALSE,meth=meth,seed=123,post=post)
+```
+Initial Analysis of Imputed data
+```{r}
+
+data7.imp
+plot(data7.imp,c("Month_1","Month_2","Month_3","Month_4","Month_5","Month_6","Month_7","Month_8","Month_9","Month_10","Month_11","Month_12","Month_13"))
+densityplot(data7.imp,~Month_1+Month_2+Month_3+Month_4+Month_5+Month_6+Month_7+Month_8+Month_9+Month_10+Month_11+Month_12+Month_13)
+densityplot(data7.imp,~DSST.0+DSST.0.5+DSST.1)
+stripplot(data7.imp,DSST.0.5~Group.0,pch=20,cex=2)
+
+```
+
+Negative binomial on pooled MI data
+```{r}
+NB.fit<-with(data7.imp,glm.nb(round(Month_1+Month_2+Month_3+Month_4+Month_5+Month_6+Month_7+Month_8+Month_9+Month_10+Month_11+Month_12+Month_13,digits=0)~Group.0+Sex.0))
+NB.fit.pooled<-pool(NB.fit)
+summary(NB.fit.pooled)
+SE<-with(data7.imp,sqrt(diag(vcovHC(glm.nb(round(Month_1+Month_2+Month_3+Month_4+Month_5+Month_6+Month_7+Month_8+Month_9+Month_10+Month_11+Month_12+Month_13,digits=0)~Group.0+Sex.0),"HC1"))))
+COEF<-with(data7.imp,coef(glm.nb(round(Month_1+Month_2+Month_3+Month_4+Month_5+Month_6+Month_7+Month_8+Month_9+Month_10+Month_11+Month_12+Month_13,digits=0)~Group.0+Sex.0)))
+group_coef<-sapply(COEF$analyses, `[[`, 2)
+group_se<-sapply(SE$analyses, `[[`, 2)
+p=2*pnorm(-abs((group_coef/group_se)))
+print(cbind(mean(group_coef),mean(group_se),mean(p)))
+est<-cbind(Estimate=mean(group_coef),LL=mean(group_coef)-1.96*mean(group_se),UL=mean(group_coef)+1.96*mean(group_se))
+exp_group<-exp(est)
+exp_group
+```
+
+Reshape wide MI data to long
+
+```{r}
+#wide<-mice::complete(data7.imp,"long",inc=TRUE)
+#wide<-data.frame(wide)
+wide<-as.list(1:40)
+for (i in 1:40){
+  wide[[i]]<-mice::complete(data7.imp,action=i)
+}
+wide<-lapply(wide,function(x)x[-c(44:45,57:69)])
+wide<-lapply(wide,function(x)x[c(1:9,12:15,26:27,10:11,16:25,28:54)] )
+names<-colnames(wide[[1]])
+names[2:15]<-gsub(".0","",names[2:15])
+names<-gsub("_","",names)
+names<-gsub("0.5","6",names)
+names<-gsub(".1",".12",names)
+names<-gsub("Stroo.12","Stroop1",names)
+wide<-lapply(wide,setNames,names)
+long<-lapply(wide,reshape,idvar="ID",varying=16:54,direction="long",sep=".")
+long<-lapply(long,function(x){
+  mutate(x,
+         Time=time/12)
+})
+```
+
+Run LMER on MI long data - suppress non-convergence and singularity warnings
+
+```{r,message=FALSE,warning=FALSE,error=FALSE}
+DSST.fit<-lapply(long,FUN=function(x){
+  lmer(DSST ~ Sex*Group+factor(Time)*Group+(1+Time|ID),data=x)
+})
+DSST.coef<-sapply(DSST.fit,fixef)
+est<-mean(DSST.coef[8,])
+SE<-mean(sapply(DSST.fit,function(x){
+  sqrt(vcov(x)[8,8])}))
+p<-mean(sapply(DSST.fit,function(x){
+  coef(summary(x))[8,5]
+}))
+print(cbind(Estimate=est,LL=est-1.96*SE,UL=est+1.96*SE,P=p))
+
+PPA.fit<-lapply(long,FUN=function(x){
+  lmer(PPA ~ Sex*Group+factor(Time)*Group+(1+Time|ID),data=x)
+})
+PPA.coef<-sapply(PPA.fit,fixef)
+est<-mean(PPA.coef[8,])
+SE<-mean(sapply(PPA.fit,function(x){
+  sqrt(vcov(x)[8,8])}))
+p<-mean(sapply(PPA.fit,function(x){
+  coef(summary(x))[8,5]
+}))
+print(cbind(Estimate=est,LL=est-1.96*SE,UL=est+1.96*SE,P=p))
+
+TUG.fit<-lapply(long,FUN=function(x){
+  lmer(MeanTUG ~ Sex*Group+factor(Time)*Group+(1+Time|ID),data=x)
+})
+TUG.coef<-sapply(TUG.fit,fixef)
+est<-mean(TUG.coef[8,])
+SE<-mean(sapply(TUG.fit,function(x){
+  sqrt(vcov(x)[8,8])}))
+p<-mean(sapply(TUG.fit,function(x){
+  coef(summary(x))[8,5]
+}))
+print(cbind(Estimate=est,LL=est-1.96*SE,UL=est+1.96*SE,P=p))
+
+SPPB.fit<-lapply(long,FUN=function(x){
+  lmer(NIATotalScore ~ Sex*Group+factor(Time)*Group+(1+Time|ID),data=x)
+})
+SPPB.coef<-sapply(SPPB.fit,fixef)
+est<-mean(SPPB.coef[8,])
+SE<-mean(sapply(SPPB.fit,function(x){
+  sqrt(vcov(x)[8,8])}))
+p<-mean(sapply(SPPB.fit,function(x){
+  coef(summary(x))[8,5]
+}))
+print(cbind(Estimate=est,LL=est-1.96*SE,UL=est+1.96*SE,P=p))
+
+Trails.fit<-lapply(long,FUN=function(x){
+  lmer((TrailB-TrailA) ~ Sex*Group+factor(Time)*Group+(1+Time|ID),data=x)
+})
+Trails.coef<-sapply(Trails.fit,fixef)
+est<-mean(Trails.coef[8,])
+SE<-mean(sapply(Trails.fit,function(x){
+  sqrt(vcov(x)[8,8])}))
+p<-mean(sapply(Trails.fit,function(x){
+  coef(summary(x))[8,5]
+}))
+print(cbind(Estimate=est,LL=est-1.96*SE,UL=est+1.96*SE,P=p))
+
+Stroop.fit<-lapply(long,FUN=function(x){
+  lmer((Stroop3-Stroop2) ~ Sex*Group+factor(Time)*Group+(1+Time|ID),data=x)
+})
+Stroop.coef<-sapply(Stroop.fit,fixef)
+est<-mean(Stroop.coef[8,])
+SE<-mean(sapply(Stroop.fit,function(x){
+  sqrt(vcov(x)[8,8])}))
+p<-mean(sapply(Stroop.fit,function(x){
+  coef(summary(x))[8,5]
+}))
+print(cbind(Estimate=est,LL=est-1.96*SE,UL=est+1.96*SE,P=p))
+
+DigitF.fit<-lapply(long,FUN=function(x){
+  lmer(DigitF ~ Sex*Group+factor(Time)*Group+(1+Time|ID),data=x)
+})
+Digit.coef<-sapply(DigitF.fit,fixef)
+est<-mean(Digit.coef[8,])
+SE<-mean(sapply(DigitF.fit,function(x){
+  sqrt(vcov(x)[8,8])}))
+p<-mean(sapply(DigitF.fit,function(x){
+  coef(summary(x))[8,5]
+}))
+print(cbind(Estimate=est,LL=est-1.96*SE,UL=est+1.96*SE,P=p))
+
+DigitB.fit<-lapply(long,FUN=function(x){
+  lmer(DigitB ~ Sex*Group+factor(Time)*Group+(1+Time|ID),data=x)
+})
+Digit.coef<-sapply(DigitB.fit,fixef)
+est<-mean(Digit.coef[8,])
+SE<-mean(sapply(DigitB.fit,function(x){
+  sqrt(vcov(x)[8,8])}))
+p<-mean(sapply(DigitB.fit,function(x){
+  coef(summary(x))[8,5]
+}))
+print(cbind(Estimate=est,LL=est-1.96*SE,UL=est+1.96*SE,P=p))
+```
+
+
+

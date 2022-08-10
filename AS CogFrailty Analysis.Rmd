@@ -1,0 +1,203 @@
+---
+title: "AS! Cognitive Frailty Analysis"
+author: "RSF"
+date: '2022-07-07'
+output: 
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1: Set-Up
+
+```{r}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(boot,MASS,readxl,mediation,plyr,sandwich,ggplot2,lme4,lmerTest,rpart,survival,survminer,lsmeans,fmsb, mice, mitools, tableone)
+
+
+setwd("~/Desktop/Manuscripts/Ongoing Projects/ActionSeniors! Cognitive Frailty/")
+data<-read_excel("ActionSeniors_CogsSPPB.xlsx")#Data#
+
+data$CogFrail<-NA
+data$CogFrail[data$SPPB_1<=9 & data$MoCA_1<26]<-"Yes"
+data$CogFrail[data$SPPB_1>9 | data$MoCA_1>=26]<-"No"
+
+data$exclude<-0
+data$exclude[data$ID==330]<-1
+
+data$Group.1<-NA
+data$Group.1[data$Group==0]<-"Interview"
+data$Group.1[data$Group==1]<-"Otago"
+
+data$Group_r[data$Group==0]<-1
+data$Group_r[data$Group==1]<-0
+
+data$Gender<-NA
+data$Gender[data$Sex==1]<-0
+data$Gender[data$Sex==2]<-1
+
+CogFrail<- subset(data, CogFrail=="Yes")
+
+CogFrail$exclude<-0
+CogFrail$exclude[CogFrail$ID==330]<-1
+
+CogFrail$Group.1<-NA
+CogFrail$Group.1[CogFrail$Group==0]<-"Interview"
+CogFrail$Group.1[CogFrail$Group==1]<-"Otago"
+
+CogFrail$Group_r[CogFrail$Group==0]<-1
+CogFrail$Group_r[CogFrail$Group==1]<-0
+
+CogFrail$Gender<-NA
+CogFrail$Gender[CogFrail$Sex==1]<-0
+CogFrail$Gender[CogFrail$Sex==2]<-1
+
+No_CogFrail<- subset(data, CogFrail=="No")
+
+No_CogFrail$exclude<-0
+No_CogFrail$exclude[No_CogFrail$ID==330]<-1
+
+No_CogFrail$Group.1<-NA
+No_CogFrail$Group.1[No_CogFrail$Group==0]<-"Interview"
+No_CogFrail$Group.1[No_CogFrail$Group==1]<-"Otago"
+
+No_CogFrail$Group_r[No_CogFrail$Group==0]<-1
+No_CogFrail$Group_r[No_CogFrail$Group==1]<-0
+
+No_CogFrail$Gender<-NA
+No_CogFrail$Gender[No_CogFrail$Sex==1]<-0
+No_CogFrail$Gender[No_CogFrail$Sex==2]<-1
+
+
+#Create long data set
+library(plyr)
+wide<-rename(data,c("Weight_1"="Weightbaseline", "Height_1"="Heightbaseline","BMI_1"="BMIbaseline",
+                    "Falls 12M prior to baseline"="Fallsbeforebaseline", "Total_Exposure"="TotalExposure",
+                    "Total_Falls"="TotalFalls","PPA_1"="PPAbaseline","GDS_1"="GDSbaseline","MoCA_1"="MoCAbaseline",
+                    "Trails_BA_1"="TrailsBAbaseline","DSST_1"="DSSTbaseline","TUG_1"="TUGbaseline",
+                    "SPPB_1"="SPPBbaseline","Gait_Speed_1"="GaitSpeedbaseline","Trails_BA_2"="TrailsBA_2",
+                    "Trails_BA_3"="TrailsBA_3","Group_r"="Group.r","Gait_Speed_2"="GaitSpeed_2","Gait_Speed_3"="GaitSpeed_3"))
+detach("package:plyr", unload = TRUE)
+
+wide$StroopINTbaseline<-as.numeric(wide$Stroop_3_1) - as.numeric(wide$Stroop_2_1)
+wide$StroopINT_2<-as.numeric(wide$Stroop_2_3) - as.numeric(wide$Stroop_2_2)
+wide$StroopINT_3<-as.numeric(wide$Stroop_3_3) - as.numeric(wide$Stroop_2_3)
+
+wide$DigitsFBbaseline<- wide$Digits_F_1 - wide$Digits_B_1
+wide$DigitsFB_2<- wide$Digits_F_2 - wide$Digits_B_2
+wide$DigitsFB_3<- wide$Digits_F_3 - wide$Digits_B_3
+
+wide$time<-1
+
+wide$Compliers<-NA #Compliance based on median compliace of 58.33%
+wide$Compliers[wide$Compliance>=58.33 | wide$Group == 0]<-1
+wide$Compliers[wide$Compliance<58.33]<-0
+
+
+wide2<-wide[c(1,76,2:12,15,16,17,64:69,77,13,14,18,21,27,28,29,31,70,73,
+              32:34,37,43:45,47,71,74,48:50,53,59:61,63,72,75)]
+data2 <- reshape(as.data.frame(wide2),idvar="ID",varying=c(34:53),direction="long",sep="_") 
+
+CogFrail_Compliance<- subset(wide2, CogFrail=="Yes" & Group==1)
+CogFrail_Compliance2<- subset(data2, CogFrail=="Yes")
+CogFrail_Compliance3<- subset(CogFrail_Compliance2, Group==1)
+```
+
+
+# 2: Primary Analysis as published in JAMA (Liu-Ambrose et al., 2021)
+
+##IRR of falls count
+```{r}
+mdl.nb<-glm.nb(TotalFalls~Group.1+scale(Gender,scale=FALSE)+offset(log(TotalExposure/365)),subset(CogFrail_Compliance,exclude==0)) 
+print(summary(mdl.nb))
+SE<-sqrt(diag(vcovHC(mdl.nb,"HC1")))
+p=2*pnorm(-abs(coef(mdl.nb)/SE))
+print(cbind(coef(mdl.nb),SE,p))
+est<-cbind(Estimate=coef(mdl.nb),LL=coef(mdl.nb)-1.96*SE,UL=coef(mdl.nb)+1.96*SE)
+exp_group<-exp(est)
+print("Use these estimates and LL and UL for the 95% CI");exp_group
+```
+
+
+
+# 3: Effects of the Otago Exercise program among high-compliance older adults with CogFrailty
+
+##Primary Outcome: IRR of Falls
+```{r}
+mdl.nb<-glm.nb(TotalFalls~Compliers+scale(Gender,scale=FALSE)+offset(log(TotalExposure/365)),subset(CogFrail_Compliance,exclude==0)) 
+print(summary(mdl.nb))
+SE<-sqrt(diag(vcovHC(mdl.nb,"HC1")))
+p=2*pnorm(-abs(coef(mdl.nb)/SE))
+print(cbind(coef(mdl.nb),SE,p))
+est<-cbind(Estimate=coef(mdl.nb),LL=coef(mdl.nb)-1.96*SE,UL=coef(mdl.nb)+1.96*SE)
+exp_group<-exp(est)
+print("Use these estimates and LL and UL for the 95% CI");exp_group
+```
+
+
+##Secondary Outcomes: Physical Function
+
+### PPA
+```{r}
+PPA_lm<-lm(PPA_3~Compliers + scale(Gender, scale=FALSE) + PPAbaseline, subset(CogFrail_Compliance, exclude==0))
+summary(PPA_lm)
+lsmeans(PPA_lm, ~Compliers)
+contrast(lsmeans(PPA_lm, ~Compliers), "trt.vs.ctrl", adj="none")
+confint(contrast(lsmeans(PPA_lm, ~Compliers), "trt.vs.ctrl", adj="none"))
+```
+
+### Gait Speed
+```{r}
+GS_lm<-lm(GaitSpeed_3~Compliers + scale(Gender, scale=FALSE) + GaitSpeedbaseline, subset(CogFrail_Compliance, exclude==0))
+summary(GS_lm)
+lsmeans(GS_lm, ~Compliers)
+contrast(lsmeans(GS_lm, ~Compliers), "trt.vs.ctrl", adj="none")
+confint(contrast(lsmeans(GS_lm, ~Compliers), "trt.vs.ctrl", adj="none"))
+```
+
+### SPPB
+```{r}
+SPPB_lm<-lm(SPPB_3 ~Compliers + scale(Gender, scale=FALSE) + SPPBbaseline, subset(CogFrail_Compliance, exclude==0))
+summary(SPPB_lm)
+lsmeans(SPPB_lm, ~Compliers)
+contrast(lsmeans(SPPB_lm, ~Compliers), "trt.vs.ctrl", adj="none")
+confint(contrast(lsmeans(SPPB_lm, ~Compliers), "trt.vs.ctrl", adj="none"))
+```
+
+### TUG
+Note: Cannot complete lsmeans procedure for some unidentifiable reason
+```{r}
+TUG_lm<-lm(TUG_3 ~ Compliers + scale(Gender, scale=FALSE) + TUGbaseline, subset(CogFrail_Compliance, exclude==0))
+summary(TUG_lm)
+```
+
+
+## Cognitive Function
+
+### MoCA
+```{r}
+MoCA_lm<-lm(MoCA_3 ~ Compliers + scale(Gender, scale=FALSE) + MoCAbaseline, subset(CogFrail_Compliance, exclude==0))
+summary(MoCA_lm)
+lsmeans(MoCA_lm, ~Compliers)
+contrast(lsmeans(MoCA_lm, ~Compliers), "trt.vs.ctrl", adj="none")
+confint(contrast(lsmeans(MoCA_lm, ~Compliers), "trt.vs.ctrl", adj="none"))
+```
+
+
+### Stroop
+Note: Model failed to converge
+
+
+### Trails B-A
+Note: Model is log-transformed due to failure to issues of non-linearity
+
+### DSST
+Note: Model is log-transformed due to failure to issues of non-linearity
+
+
+### Digit Span Forward - Backward
+Note: Model is log-transformed due to failure to issues of non-linearity
+

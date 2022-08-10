@@ -1,0 +1,73 @@
+"0","setwd(""~/Desktop/Manuscripts/Ongoing Projects/ActionSeniors! Cognitive Frailty/"")"
+"2","Warning: The working directory was changed to /Users/ryan/Desktop/Manuscripts/Ongoing Projects/ActionSeniors! Cognitive Frailty inside a notebook chunk. The working directory will be reset when the chunk is finished running. Use the knitr root.dir option in the setup chunk to change the working directory for notebook chunks."
+"0","compliancedata<-read_excel(""jcd AS_compliance_Jul 2021.xlsx"", sheet = ""Compliance_for analysis"") #Data#"
+"2","New names:
+* `` -> ...69
+"
+"0","compliancedata2<-compliancedata[c(1,7,11,15,19,23,27,31,35,39,43,47,51,55,66)]"
+"0","compliancedata2<-compliancedata2[-c(173:177),]"
+"0","library(plyr)"
+"2","
+Attaching package: ‘plyr’
+
+"
+"2","The following object is masked from ‘package:ggpubr’:
+
+    mutate
+
+"
+"0","compliancedata2<-rename(compliancedata2, c(""id""=""ID""))"
+"0","detach(""package:plyr"", unload = TRUE)"
+"0",""
+"0","OEP<-subset(wide, Group == 1)"
+"0","compliancedata3<-merge(OEP,compliancedata2, by = c(""ID""))"
+"0","compliancedata3<-compliancedata3[c(1,3,65,77:90)]"
+"0","library(plyr)"
+"2","
+Attaching package: ‘plyr’
+
+"
+"2","The following object is masked from ‘package:ggpubr’:
+
+    mutate
+
+"
+"0","compliancedata3<-rename(compliancedata3, c(""OEPCOMP1""=""OEPCOMP_1"",""OEPCOMP2""=""OEPCOMP_2"",""OEPCOMP3""=""OEPCOMP_3"",""OEPCOMP4""=""OEPCOMP_4"",""OEPCOMP5""=""OEPCOMP_5"",""OEPCOMP6""=""OEPCOMP_6"","
+"0","                                           ""OEPCOMP7""=""OEPCOMP_7"",""OEPCOMP8""=""OEPCOMP_8"",""OEPCOMP9""=""OEPCOMP_9"",""OEPCOMP10""=""OEPCOMP_10"",""OEPCOMP11""=""OEPCOMP_11"",""OEPCOMP12""=""OEPCOMP_12"","
+"0","                                           ""OEPCOMP13""=""OEPCOMP_13""))"
+"0","detach(""package:plyr"", unload = TRUE)"
+"0",""
+"0","#long form"
+"0","compliancelong <- reshape(as.data.frame(compliancedata3),idvar=""ID"",varying=c(4:16),direction=""long"",sep=""_"")"
+"0",""
+"0","#Maximize compliance at 100% (i.e., compliance cannot be greater than 100%, regardless of how many times/month OEP was completed)"
+"0","compliancelong$OEPCOMP[compliancelong$OEPCOMP>100]<-100"
+"0",""
+"0","#Maximize compliance at 100% for each individual month"
+"0","compliancedata2$OEPCOMP1[compliancedata2$OEPCOMP1>100]<-100"
+"0","compliancedata2$OEPCOMP2[compliancedata2$OEPCOMP2>100]<-100"
+"0","compliancedata2$OEPCOMP3[compliancedata2$OEPCOMP3>100]<-100"
+"0","compliancedata2$OEPCOMP4[compliancedata2$OEPCOMP4>100]<-100"
+"0","compliancedata2$OEPCOMP5[compliancedata2$OEPCOMP5>100]<-100"
+"0","compliancedata2$OEPCOMP6[compliancedata2$OEPCOMP6>100]<-100"
+"0","compliancedata2$OEPCOMP7[compliancedata2$OEPCOMP7>100]<-100"
+"0","compliancedata2$OEPCOMP8[compliancedata2$OEPCOMP8>100]<-100"
+"0","compliancedata2$OEPCOMP9[compliancedata2$OEPCOMP9>100]<-100"
+"0","compliancedata2$OEPCOMP10[compliancedata2$OEPCOMP10>100]<-100"
+"0","compliancedata2$OEPCOMP11[compliancedata2$OEPCOMP11>100]<-100"
+"0","compliancedata2$OEPCOMP12[compliancedata2$OEPCOMP12>100]<-100"
+"0","compliancedata2$OEPCOMP13[compliancedata2$OEPCOMP13>100]<-100"
+"0",""
+"0","compliancedata2$AverageComply<-(compliancedata2[c(2)] + compliancedata2[c(3)] + compliancedata2[c(4)] + compliancedata2[c(5)] + compliancedata2[c(6)] + compliancedata2[c(7)] + "
+"0","                                  compliancedata2[c(8)] + compliancedata2[c(9)] + compliancedata2[c(10)] + compliancedata2[c(11)] + compliancedata2[c(12)] + compliancedata2[c(13)] + "
+"0","                                  compliancedata2[c(14)])/13"
+"0",""
+"0","OEP2<-subset(wide2, Group == 1)"
+"0",""
+"0",""
+"0","#Determine compliant vs. non compiant for CogFrail and Non-Frail"
+"0","OEP2$Compliant<-NA"
+"0","OEP2$Compliant[compliancedata2$AverageComply>=51.1 & OEP$CogFrail==""No"" | compliancedata2$AverageComply>=44.0 & OEP$CogFrail==""Yes""] <- ""Yes"""
+"0","OEP2$Compliant[compliancedata2$AverageComply<51.1 & OEP$CogFrail==""No"" | compliancedata2$AverageComply<44.0 & OEP$CogFrail==""Yes""] <- ""No"""
+"0",""
+"0","OEP3 <- reshape(as.data.frame(OEP2),idvar=""ID"",varying=c(33:52),direction=""long"",sep=""_"") "

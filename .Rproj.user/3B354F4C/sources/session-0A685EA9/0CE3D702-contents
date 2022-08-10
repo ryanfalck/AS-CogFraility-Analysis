@@ -1,0 +1,570 @@
+---
+title: "REVISED Vitality Analysis (August 3rd, 2022)"
+author: "RSF"
+date: "2022-08-03"
+output:
+  html_document:
+    toc: true
+    theme: united
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# 1) Data Management
+Set-up for all analyses
+
+```{r}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(readxl, plyr, lme4,nlme, robustlmm, car, broom, lsmeans, ggplot2, psych, HLMdiag, tableone,mice,extrafont)
+setwd("~/Desktop/Manuscripts/Ongoing Projects/Vitality Primary Outcome")#Directory where you put the spreadsheet
+Vitality <- read_excel("VITALITY_MASTER_April 19, 2022.xlsx")
+
+spaceless <- function(x) {colnames(x) <- gsub(" ", "_", colnames(x));x}
+data1<-spaceless(Vitality)
+data2<-data1[c(1:7,9:25,27,29,31,35:37,44,45,50:59,72,74:76,89:91,77,92)]
+data3<-rename(data2, c("Participant_ID"="ID", "Timepoint"="Time", "Type_of_stroke_(first_stroke)"="Type_of_stroke", "Hemisphere_affected_(first_stroke)"="Hemisphere_affected", 
+                       "Location_of_stroke_(first_stroke)"="Location_of_stroke","Digit_Span_Forward_Total_Correct"="DSF", "Digit_Span_Backward_Total_Correct"="DSB",
+                       "Trail_Making_A_time_to_complete"="Trails_A", "Trail_Making_B_time_to_complete"="Trails_B", "Trail_Making_Test_Score_(B-A)"="Trails_B_A",
+                       "Waist_to_Hip_Ratio"="WHR", "Total_IADL_Score"="Total_IADL", "NIA_Total_Score"="SPPB_Score"))
+
+
+#Education
+data3$EDU<-NULL
+data3$EDU[data3$Education==1]<- "High School or Less"
+data3$EDU[data3$Education==2]<- "High School or Less"
+data3$EDU[data3$Education==3]<- "High School or Less"
+data3$EDU[data3$Education==4]<- "Trade School or Some College"
+data3$EDU[data3$Education==5]<- "Trade School or Some College"
+data3$EDU[data3$Education==6]<- "University Degree or Higher"
+
+
+#Stroop Interference Scoring
+data3$Stroop_INT_Ratio<- (data3$Median.inc.RT - data3$Median.con.RT)/data3$Median.con.RT
+data3$Stroop_INT_Diff<- data3$Median.inc.RT - data3$Median.con.RT
+data3$Stroop_IIV<- data1$SD.inc.RT - data1$SD.con.RT
+
+#Digit Span Forward-Backward
+data3$DSFB<- data3$DSF - data3$DSB
+
+#Gait Speed
+data3$GaitSpeed<- 4/data1$NIA_Walking_Time_in_seconds
+
+#walking Aid Use
+data1$Aid<- NA
+data3$Aid[data1$Walking_Aid=="None" & data1$Timepoint == 1]<-0
+data3$Aid[data1$Walking_Aid=="AFO on left" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="AFO on left, and needs transfer belt" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="arm resst used" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="Brace" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="Cane" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="Cane\r\nBrace" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="Cane\r\nBrace (R-leg brace)\r\nBrace" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="Cane\r\nBrace\r\nNeurostep implant in leg" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="Cane\r\nBrace\r\nUsed armrests" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="Cane\r\nHand push off chair" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="Cane\r\nHand push off from chair" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="Cane\r\nHand push off of chair" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="Cane\r\nHands push off chair" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="Nordic Poles" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="support belt for back" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="Walker" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="Walker Cane combination" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="walking pole (only one) - left side" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="walking poles" & data1$Timepoint == 1]<-1
+data3$Aid[data1$Walking_Aid=="Walking poles" & data1$Timepoint == 1]<-1
+
+#Remove ID VIT_083
+data4<-subset(data3, ID!="VIT_083")
+
+
+#MCI and Dementia by ADAS-Cog Plus
+data4$Cog_Status<-NA
+data4$Cog_Status[data4$ADAS_COG_PLUS<=1]<-"Normal"
+data4$Cog_Status[data4$ADAS_COG_PLUS>=-1 & data4$ADAS_COG_PLUS<=1]<-"MCI"
+data4$Cog_Status[data4$ADAS_COG_PLUS>=1]<-"Dementia"
+```
+
+
+# 2) Table 1 - Baseline participant characteristics by group
+
+```{r}
+Baseline<-subset(data3, Time==1)
+
+vars<-dput(names(Baseline[c(31,32,6,7,52,36,49,46,12,10,14,53,47,42,43,57,50,48,51)]))
+
+Table1_continuous<-CreateTableOne(vars=vars, strata = "Group", data=Baseline)
+print(Table1_continuous,contDigits=2,missing=TRUE,quote=TRUE)
+```
+
+
+# 3) Stroke occurences and locations by group
+
+```{r}
+table(Baseline$Date_of_first_stroke, Baseline$Group)
+
+#BAT: Strokes occurred between 1999 - 2012
+#COG: Strokes occurred between 2004 - 2015
+#EX:  Strokes occurred between 1993 - 2016
+
+table(Baseline$Location_of_stroke, Baseline$Group)
+
+table(Baseline$Type_of_stroke, Baseline$Group)
+
+describeBy(Baseline$Number_of_strokes, Baseline$Group)
+
+setwd("~/Desktop/Manuscripts/Ongoing Projects/Vitality Primary Outcome/Data")
+Info <- read_excel("Vitality Stroke Info_20220715.xlsx")
+
+describeBy(Info$`Months Since Last Stroke`,Info$Group)
+```
+
+# 4) Prepare the data for linear mixed model
+
+```{r}
+data5<-data4[c(1:3,31,32,6,7,52,36,49,46,12,10,14,53,47,42,43,57,50,48,51)]
+
+varying<-data5[c(1:2,14:22:length(data5))]
+baseline<-subset(data5[-c(14:22:length(data5))], Time==1)
+
+varying.1 <- subset(varying,Time==1)
+varying.2 <- subset(varying,Time==3)
+varying.3 <- subset(varying,Time==4)
+
+colnames(varying.1) <- paste(colnames(varying.1),"1",sep=".")
+colnames(varying.2) <- paste(colnames(varying.2),"2",sep=".")
+colnames(varying.3) <- paste(colnames(varying.3),"3",sep=".")
+
+library(dplyr)
+wide.data <- left_join(baseline,varying.1,by=c("ID"="ID.1")) %>% 
+  left_join(.,varying.2,by=c("ID"="ID.2")) %>% 
+  left_join(.,varying.3,by=c("ID"="ID.3"))
+detach("package:dplyr", unload = TRUE)
+
+Timevars <- grep("Time",colnames(wide.data),value=TRUE)
+wide.data <- wide.data[,!(colnames(wide.data)%in%Timevars)]
+
+colnames(wide.data) <- (gsub("_","",colnames(wide.data)))
+colnames(wide.data) <- (gsub(".1","baseline",colnames(wide.data)))
+
+data6 <- reshape(as.data.frame(wide.data),idvar="ID",varying=22:39,direction="long",sep=".") #reshape to long data frame with T2 and T3 repeated outcome and baseline as separate time-invariant
+
+data6$Sex<- ifelse(data6$Gender=="Male",1,0)
+
+data6$Group.1<-NA
+data6$Group.1[data6$Group=="COG"]<-1
+data6$Group.1[data6$Group=="BAT"]<-0
+data6$Group.1[data6$Group=="EX"]<-2
+
+#Create dataframes with baseline values
+baseline.adas.mean<- cbind(c(0.16,0.12,0.39,0.16,0.12,0.39))
+baseline.adas.se<- cbind(c(0.12,0.12,0.13,0.12,0.12,0.13))
+baseline.Stroop.mean<- cbind(c(0.16,0.16,0.16,0.16,0.16,0.16))
+baseline.Stroop.se<- cbind(c(0.02,0.02,0.02,0.02,0.02,0.02))
+baseline.6MWT.mean<- cbind(c(340.79,342.47,291.09,340.79,342.47,291.09))
+baseline.6MWT.se<- cbind(c(18.28,24.60,25.35,18.28,24.60,25.35))
+baseline.Gait.mean<- cbind(c(0.91,0.88,0.76,0.91,0.88,0.76))
+baseline.Gait.se<- cbind(c(0.04,0.06,0.05,0.04,0.06,0.05))
+baseline.CESD.mean<-cbind(c(10.7,7.88,8.74,10.7,7.88,8.74))
+baseline.CESD.se<-cbind(c(1.2,1.62,1.08,1.2,1.62,1.08))
+baseline.PA.mean<-cbind(c(3536.30,3535.41,3262.16,3536.30,3535.41,3262.16))
+baseline.PA.se<-cbind(c(315.76,466.12,428.68,315.76,466.12,428.68))
+baseline.adas11.mean<-cbind(c(17.19,16.42,18.16,17.19,16.42,18.16))
+baseline.adas11.se<-cbind(c(1.11,1.08,1.28,1.11,1.08,1.28))
+baseline.IDAL.mean<- cbind(c(6.79,6.79,7.00,7.00,6.82,6.82))
+baseline.IDAL.se<- cbind(c(0.24,0.24,0.22,0.22,0.31,0.31))
+baseline.SPPB.mean<- cbind(c(8.69,8.69,8.15,8.15,7.44,7.44))
+baseline.SPPB.se<- cbind(c(0.39,0.39,0.42,0.42,0.43,0.43))
+```
+
+# 5) Linear Mixed Model Function
+
+This function runs the analysis for the linear mixed model
+
+```{r}
+lmm.ex.mdl<- function(y,cov1,cov2,baselinemean, baselinese){
+  model <- lmer(as.formula(paste0(y, "~factor(Group.1)*factor(time) +", cov1, "+", cov2, "+ (1|ID)")), data= data6)
+  modelsummary <- summary(model)
+  means.1 <- lsmeans(model, ~Group.1|time)
+  contrasts <- contrast(means.1, "trt.vs.ctrl", adj="none")
+  conf.95<-confint(contrasts, parm, level = 0.95)
+  within.means.frame<-as.data.frame(means.1)
+  within.means<-as.numeric(as.character(unlist(within.means.frame[3])))
+  within.means.se<-as.numeric(as.character(unlist(within.means.frame[4])))
+  baselinemean.1<-as.numeric(paste0(baselinemean))
+  baselinese.1<-as.numeric(paste0(baselinese))
+  groups.frame<-cbind(c(0,1,2,0,1,2))
+  testframe<-as.data.frame(cbind(groups.frame,baselinemean.1,baselinese.1,within.means,within.means.se))
+  testframe$within.diff.means<- testframe$baselinemean - testframe$within.means
+  testframe$within.diff.se<- sqrt(testframe$baselinese^2 + testframe$within.means.se^2)
+  testframe$within.diff_LL<-testframe$within.means - 1.96*testframe$within.diff.se
+  testframe$within.diff_UL<-testframe$within.means + 1.96*testframe$within.diff.se 
+  EX_BAT_diff2<-testframe$within.diff.means[3]-testframe$within.diff.means[1]
+  EX_BAT_diff3<-testframe$within.diff.means[6]-testframe$within.diff.means[4]
+  COG_BAT_diff2<-testframe$within.diff.means[2]-testframe$within.diff.means[1]
+  COG_BAT_diff3<-testframe$within.diff.means[5]-testframe$within.diff.means[4]
+  EX_BAT_diff_se2<-sqrt(testframe$within.diff.se[3]^2+testframe$within.diff.se[1]^2)
+  EX_BAT_diff_se3<-sqrt(testframe$within.diff.se[6]^2+testframe$within.diff.se[4]^2)
+  COG_BAT_diff_se2<-sqrt(testframe$within.diff.se[2]^2+testframe$within.diff.se[1]^2)
+  COG_BAT_diff_se3<-sqrt(testframe$within.diff.se[5]^2+testframe$within.diff.se[4]^2)
+  EX_BAT_diff2_UL<-EX_BAT_diff2 + 1.96*EX_BAT_diff_se2
+  EX_BAT_diff2_LL<-EX_BAT_diff2 - 1.96*EX_BAT_diff_se2
+  COG_BAT_diff2_UL<-COG_BAT_diff2 + 1.96*COG_BAT_diff_se2
+  COG_BAT_diff2_LL<-COG_BAT_diff2 - 1.96*COG_BAT_diff_se2
+  EX_BAT_diff3_UL<-EX_BAT_diff3 + 1.96*EX_BAT_diff_se3
+  EX_BAT_diff3_LL<-EX_BAT_diff3 - 1.96*EX_BAT_diff_se3
+  COG_BAT_diff3_UL<-COG_BAT_diff3 + 1.96*COG_BAT_diff_se3
+  COG_BAT_diff3_LL<-COG_BAT_diff3 - 1.96*COG_BAT_diff_se3
+  EX_BAT_diff2_t<-EX_BAT_diff2/EX_BAT_diff_se2
+  EX_BAT_diff3_t<-EX_BAT_diff3/EX_BAT_diff_se3
+  COG_BAT_diff2_t<-COG_BAT_diff2/COG_BAT_diff_se2
+  COG_BAT_diff3_t<-COG_BAT_diff3/COG_BAT_diff_se3
+  contrastframe<-as.data.frame(contrasts)
+  EX_BAT_diff_df2<-contrastframe$df[2]
+  EX_BAT_diff_df3<-contrastframe$df[4]
+  COG_BAT_diff_df2<-contrastframe$df[1]
+  COG_BAT_diff_df3<-contrastframe$df[3]
+  EX_BAT_p2<-2*pt(EX_BAT_diff2_t,EX_BAT_diff_df2,lower=FALSE)
+  EX_BAT_p3<-2*pt(EX_BAT_diff3_t,EX_BAT_diff_df3,lower=FALSE)
+  COG_BAT_p2<-2*pt(COG_BAT_diff2_t,COG_BAT_diff_df2,lower=FALSE)
+  COG_BAT_p3<-2*pt(COG_BAT_diff3_t,COG_BAT_diff_df3,lower=FALSE)
+  diff_frame<-as.data.frame(cbind(EX_BAT_diff2,EX_BAT_diff2_LL,EX_BAT_diff2_UL,EX_BAT_p2,EX_BAT_diff3,
+                                  EX_BAT_diff3_LL,EX_BAT_diff3_UL,EX_BAT_p3,COG_BAT_diff2,COG_BAT_diff2_LL,
+                                  COG_BAT_diff2_UL,COG_BAT_p2,COG_BAT_diff3,COG_BAT_diff3_LL,COG_BAT_diff3_UL,
+                                  COG_BAT_p3))
+  return(list(summary=modelsummary, lsmeans=means.1, group_contrasts=contrasts, 
+              contrasts_ci.95=conf.95, testframe,diff_frame))
+}
+```
+
+# 6) Negative binomial mixed model function
+
+This function runs the analysis for models which required a negative binomial function (i.e., IADL and SPPB)
+
+```{r}
+if(!"ggeffects" %in% installed.packages()) {
+  install.packages("ggeffects")}
+library(ggeffects)
+
+NBM<-data6
+NBM$TotalIADL_r<-8-NBM$TotalIADL
+NBM$TotalIADLbaseline_r<-8-NBM$TotalIADLbaseline
+NBM$SPPBScore_r<-12-NBM$SPPBScore
+NBM$SPPBScorebaseline_r<-12-NBM$SPPBScorebaseline
+
+nbb.ex.mdl<- function(z,covar1,covar2,reverse,baselinemean1,baseline1.se){
+  model.1 <- glmer.nb(as.formula(paste0(z, "~factor(Group.1)*factor(time) +", covar1, "+", covar2, "+ (1|ID)")), data= NBM)
+  modelsummary <- summary(model.1)
+  marginalmeans <- as.data.frame(ggpredict(model.1, terms = c("Group.1", "time"), type="re"))
+  marginalmeans$predicted_r<- reverse - marginalmeans$predicted
+  marginalmeans$predicted_LL_r<- reverse - marginalmeans$conf.high
+  marginalmeans$predicted_UL_r<- reverse - marginalmeans$conf.low
+  marginalmeans$Group<-marginalmeans$x
+  within.means<-baselinemean1 - marginalmeans$predicted_r
+  within.se<- sqrt(baseline1.se^2+marginalmeans$std.error^2)
+  within.LL<-within.means - within.se*1.96
+  within.UL<-within.means - within.se*1.96
+  within<-as.data.frame(cbind(marginalmeans$Group,within.means,within.se,within.LL,within.UL))
+  library(plyr)
+  within<-rename(within,c("V1" ="Group","V2"="within.diff.means","V3"="within.diff.se",
+                          "V4"="within.diff.LL","V5"="within.diff.UL"))
+  EX_BAT_diff2<-marginalmeans$predicted_r[5] - marginalmeans$predicted_r[1]
+  EX_BAT_diff3<-marginalmeans$predicted_r[6] - marginalmeans$predicted_r[2]
+  COG_BAT_diff2<-marginalmeans$predicted_r[3]-marginalmeans$predicted_r[1]
+  COG_BAT_diff3<-marginalmeans$predicted_r[4]-marginalmeans$predicted_r[2]
+  EX_BAT_diff_se2<-sqrt(marginalmeans$std.error[5]^2+marginalmeans$std.error[1]^2)
+  EX_BAT_diff_se3<-sqrt(marginalmeans$std.error[6]^2+marginalmeans$std.error[2]^2)
+  COG_BAT_diff_se2<-sqrt(marginalmeans$std.error[3]^2+marginalmeans$std.error[1]^2)
+  COG_BAT_diff_se3<-sqrt(marginalmeans$std.error[4]^2+marginalmeans$std.error[2]^2)
+  EX_BAT_diff2_UL<-EX_BAT_diff2 + 1.96*EX_BAT_diff_se2
+  EX_BAT_diff2_LL<-EX_BAT_diff2 - 1.96*EX_BAT_diff_se2
+  COG_BAT_diff2_UL<-COG_BAT_diff2 + 1.96*COG_BAT_diff_se2
+  COG_BAT_diff2_LL<-COG_BAT_diff2 - 1.96*COG_BAT_diff_se2
+  EX_BAT_diff3_UL<-EX_BAT_diff3 + 1.96*EX_BAT_diff_se3
+  EX_BAT_diff3_LL<-EX_BAT_diff3 - 1.96*EX_BAT_diff_se3
+  COG_BAT_diff3_UL<-COG_BAT_diff3 + 1.96*COG_BAT_diff_se3
+  COG_BAT_diff3_LL<-COG_BAT_diff3 - 1.96*COG_BAT_diff_se3
+  EX_BAT_diff2_t<-EX_BAT_diff2/EX_BAT_diff_se2
+  EX_BAT_diff3_t<-EX_BAT_diff3/EX_BAT_diff_se3
+  COG_BAT_diff2_t<-COG_BAT_diff2/COG_BAT_diff_se2
+  COG_BAT_diff3_t<-COG_BAT_diff3/COG_BAT_diff_se3
+  EX_BAT_diff_p2<-2*pnorm(EX_BAT_diff2_t,lower=FALSE)
+  EX_BAT_diff_p3<-2*pnorm(EX_BAT_diff3_t,lower=FALSE)
+  COG_BAT_diff_p2<-2*pnorm(COG_BAT_diff2_t,lower=FALSE)
+  COG_BAT_diff_p3<-2*pnorm(COG_BAT_diff3_t,lower=FALSE)
+  between<-as.data.frame(rbind(EX_BAT_diff2,EX_BAT_diff2_LL,EX_BAT_diff2_UL,EX_BAT_diff_p2, COG_BAT_diff2, COG_BAT_diff2_LL,
+                               COG_BAT_diff2_UL, COG_BAT_diff_p2, EX_BAT_diff3, EX_BAT_diff2_LL, EX_BAT_diff3_UL, 
+                               EX_BAT_diff_p3, COG_BAT_diff3, COG_BAT_diff3_LL, COG_BAT_diff3_UL, COG_BAT_diff_p3))
+  
+  return(list(Means=marginalmeans,Within_Change=within,Between_Change=between))
+}
+```
+
+# 7) Primary analysis results
+
+Results for the ADAS-Cog Plus
+```{r}
+lmm.ex.mdl("ADASCOGPLUS", "ADASCOGPLUSbaseline", "BaselineMMSE", baseline.adas.mean, baseline.adas.se)#PRIMARY OUTCOME:ADAS-COG Plus
+```
+
+
+# 8) Secondary outcomes
+
+ADAS-Cog 13
+```{r}
+lmm.ex.mdl("ADASCObaseline1", "ADASCObaseline1baseline", "BaselineMMSE", baseline.adas11.mean, baseline.adas11.se)#ADAS-Cog 11
+```
+
+Stroop INT Ratio
+```{r}
+lmm.ex.mdl("StroopINTRatio", "StroopINTRatiobaseline", "BaselineMMSE", baseline.Stroop.mean, baseline.Stroop.se)#SECONDARY OUTCOME: Stroop Interference Ratio
+```
+
+Six Minute Walk
+```{r}
+lmm.ex.mdl("MetersWalked", "MetersWalkedbaseline", "FMTotalScore", baseline.6MWT.mean, baseline.6MWT.se)#SECONDARY OUTCOME: 6 Minute Walk Test
+```
+
+Gait Speed
+```{r}
+lmm.ex.mdl("GaitSpeed", "GaitSpeedbaseline", "FMTotalScore", baseline.Gait.mean, baseline.Gait.se)#SECONDARY OUTCOME: Gaitspeed
+```
+
+Self-Reported Physical Activity from the CHAMPS Questionnaire
+```{r}
+lmm.ex.mdl("CHAMPSTotalPA", "CHAMPSTotalPAbaseline", "FMTotalScore", baseline.PA.mean, baseline.PA.se)#SECONDARY OUTCOME: CES-D
+```
+
+IADL (Uses negative binomial function)
+```{r}
+nbb.ex.mdl("TotalIADL_r", "TotalIADLbaseline_r", "FMTotalScore",8,baseline.IDAL.mean,baseline.IDAL.se)#SECONDARY OUTCOME:IADL
+```
+
+SPPB (Uses negative binomial function)
+```{r}
+nbb.ex.mdl("SPPBScore_r", "SPPBScorebaseline_r", "FMTotalScore",12,baseline.SPPB.mean,baseline.SPPB.se)#SECONDARY OUTCOME:SPPB
+```
+
+# 9) Tertiary Analysis
+
+Spearman correlations exploring the relationship between changes in cognition and changes in physical function
+
+```{r}
+#Change scores (Baseline - 6 months; only from primary intervention;
+#positive scores indicate improvement)
+data7<-subset(data6, time==2)
+data7$ADASCOGPLUSchange<- data7$ADASCOGPLUSbaseline - data7$ADASCOGPLUS
+data7$SPPBchange<- data7$SPPBScorebaseline - data7$SPPBScore
+data7$IADLchange<- data7$TotalIADLbaseline - data7$TotalIADL
+data7$ADASCOchange<- data7$ADASCObaseline1baseline - data7$ADASCObaseline1
+
+#ADAS-Cog Plus
+cor.test(x=data7$ADASCOGPLUSchange, y=data7$IADLchange, method = 'spearman')
+cor.test(x=data7$ADASCOGPLUSchange, y=data7$SPPBchange, method = 'spearman')
+
+#ADAS-Cog 13
+cor.test(x=data7$ADASCOchange, y=data7$IADLchange, method = 'spearman')
+cor.test(x=data7$ADASCOchange, y=data7$SPPBchange, method = 'spearman')
+```
+
+
+# 10) Sensitivity Analysis - Complete case analyses
+
+First we remove participants with incomplete data
+```{r}
+attach(data6)
+cc.analysis<-subset(data6, ID!='VIT_011' & ID!='VIT_016' & ID!='VIT_027' & ID!='VIT_034' & ID!='VIT_051' & ID!='VIT_056' &
+                      ID!='VIT_067' & ID!='VIT_071' & ID!='VIT_091' & ID!='VIT_094' & ID!='VIT_101' & ID!='VIT_104' &
+                      ID!='VIT_105' & ID!='VIT_108' & ID!='VIT_112' & ID!='VIT_115' & ID!='VIT_116' & ID!='VIT_012' & ID!='VIT_087' &
+                      ID!='VIT_090' & ID!='VIT_096' & ID!='VIT_099' & ID!='VIT_100' & ID!='VIT_102' & ID!='VIT_120')
+```
+
+Baseline characteristics of participants in the complete case analysis
+```{r}
+Baseline.cc<-subset(cc.analysis, time==2)
+vars<-dput(names(Baseline.cc[c(3,5,6,7,10,11,12,13,14,15,16,17,18,19)]))
+Table1_continuous<-CreateTableOne(vars=vars, strata = "Group", data=Baseline.cc)
+print(Table1_continuous,contDigits=2,missing=TRUE,quote=TRUE)
+```
+
+Linear Mixed Model Set-up
+```{r}
+baseline.adas.mean.cc<- cbind(c(0.00,0.11,0.22,0.00,0.11,0.22))
+baseline.adas.se.cc<- cbind(c(0.09,0.09,0.09,0.09,0.09,0.09))
+baseline.Stroop.mean.cc<- cbind(c(0.17,0.18,0.15,0.17,0.18,0.15))
+baseline.Stroop.se.cc<- cbind(c(0.02,0.02,0.02,0.02,0.02,0.02))
+baseline.6MWT.mean.cc<- cbind(c(350.7,360.14,310.25,350.7,360.14,310.25))
+baseline.6MWT.se.cc<- cbind(c(13.79,19.06,21.75,13.79,19.06,21.75))
+baseline.Grip.mean.cc<- cbind(c(23.87,25.65,25.06,23.87,25.65,25.06))
+baseline.Grip.se.cc<- cbind(c(1.12,1.76,1.15,1.12,1.76,1.15))
+baseline.Gait.mean.cc<- cbind(c(0.92,0.93,0.80,0.92,0.93,0.80))
+baseline.Gait.se.cc<- cbind(c(0.03,0.05,0.05,0.03,0.05,0.05))
+baseline.CHAMPSPA.mean.cc<-cbind(c(3705.97,3803.29,3744.84,3705.97,3803.29,3744.84))
+baseline.CHAMPSPA.se.cc<-cbind(c(361.04,541.64,522.75,361.04,541.64,522.75))
+baseline.adas11.mean.cc<-cbind(c(15.93,15.89,16.20,15.93,15.89,16.20))
+baseline.adas11.se.cc<-cbind(c(1.05,1.18,1.11,1.05,1.18,1.11))
+```
+
+Linear Mixed Model Function
+```{r}
+lmm.ex.md.cc<- function(y,cov1,cov2,baselinemean, baselinese){
+  model <- lmer(as.formula(paste0(y, "~factor(Group.1)*factor(time) +", cov1, "+", cov2, "+ (1|ID)")), data= cc.analysis)
+  modelsummary <- summary(model)
+  means.1 <- lsmeans(model, ~Group.1|time)
+  contrasts <- contrast(means.1, "trt.vs.ctrl", adj="none")
+  conf.95<-confint(contrasts, parm, level = 0.95)
+  within.means.frame<-as.data.frame(means.1)
+  within.means<-as.numeric(as.character(unlist(within.means.frame[3])))
+  within.means.se<-as.numeric(as.character(unlist(within.means.frame[4])))
+  baselinemean.1<-as.numeric(paste0(baselinemean))
+  baselinese.1<-as.numeric(paste0(baselinese))
+  groups.frame<-cbind(c(0,1,2,0,1,2))
+  testframe<-as.data.frame(cbind(groups.frame,baselinemean.1,baselinese.1,within.means,within.means.se))
+  testframe$within.diff.means<- testframe$baselinemean - testframe$within.means
+  testframe$within.diff.se<- sqrt(testframe$baselinese^2 + testframe$within.means.se^2)
+  testframe$within.diff_LL<-testframe$within.means - 1.96*testframe$within.diff.se
+  testframe$within.diff_UL<-testframe$within.means + 1.96*testframe$within.diff.se 
+  EX_BAT_diff2<-testframe$within.diff.means[3]-testframe$within.diff.means[1]
+  EX_BAT_diff3<-testframe$within.diff.means[6]-testframe$within.diff.means[4]
+  COG_BAT_diff2<-testframe$within.diff.means[2]-testframe$within.diff.means[1]
+  COG_BAT_diff3<-testframe$within.diff.means[5]-testframe$within.diff.means[4]
+  EX_BAT_diff_se2<-sqrt(testframe$within.diff.se[3]^2+testframe$within.diff.se[1]^2)
+  EX_BAT_diff_se3<-sqrt(testframe$within.diff.se[6]^2+testframe$within.diff.se[4]^2)
+  COG_BAT_diff_se2<-sqrt(testframe$within.diff.se[2]^2+testframe$within.diff.se[1]^2)
+  COG_BAT_diff_se3<-sqrt(testframe$within.diff.se[5]^2+testframe$within.diff.se[4]^2)
+  EX_BAT_diff2_UL<-EX_BAT_diff2 + 1.96*EX_BAT_diff_se2
+  EX_BAT_diff2_LL<-EX_BAT_diff2 - 1.96*EX_BAT_diff_se2
+  COG_BAT_diff2_UL<-COG_BAT_diff2 + 1.96*COG_BAT_diff_se2
+  COG_BAT_diff2_LL<-COG_BAT_diff2 - 1.96*COG_BAT_diff_se2
+  EX_BAT_diff3_UL<-EX_BAT_diff3 + 1.96*EX_BAT_diff_se3
+  EX_BAT_diff3_LL<-EX_BAT_diff3 - 1.96*EX_BAT_diff_se3
+  COG_BAT_diff3_UL<-COG_BAT_diff3 + 1.96*COG_BAT_diff_se3
+  COG_BAT_diff3_LL<-COG_BAT_diff3 - 1.96*COG_BAT_diff_se3
+  EX_BAT_diff2_t<-EX_BAT_diff2/EX_BAT_diff_se2
+  EX_BAT_diff3_t<-EX_BAT_diff3/EX_BAT_diff_se3
+  COG_BAT_diff2_t<-COG_BAT_diff2/COG_BAT_diff_se2
+  COG_BAT_diff3_t<-COG_BAT_diff3/COG_BAT_diff_se3
+  contrastframe<-as.data.frame(contrasts)
+  EX_BAT_diff_df2<-contrastframe$df[2]
+  EX_BAT_diff_df3<-contrastframe$df[4]
+  COG_BAT_diff_df2<-contrastframe$df[1]
+  COG_BAT_diff_df3<-contrastframe$df[3]
+  EX_BAT_p2<-2*pt(EX_BAT_diff2_t,EX_BAT_diff_df2,lower=FALSE)
+  EX_BAT_p3<-2*pt(EX_BAT_diff3_t,EX_BAT_diff_df3,lower=FALSE)
+  COG_BAT_p2<-2*pt(COG_BAT_diff2_t,COG_BAT_diff_df2,lower=FALSE)
+  COG_BAT_p3<-2*pt(COG_BAT_diff3_t,COG_BAT_diff_df3,lower=FALSE)
+  diff_frame<-as.data.frame(cbind(EX_BAT_diff2,EX_BAT_diff2_LL,EX_BAT_diff2_UL,EX_BAT_p2,EX_BAT_diff3,
+                                  EX_BAT_diff3_LL,EX_BAT_diff3_UL,EX_BAT_p3,COG_BAT_diff2,COG_BAT_diff2_LL,
+                                  COG_BAT_diff2_UL,COG_BAT_p2,COG_BAT_diff3,COG_BAT_diff3_LL,COG_BAT_diff3_UL,
+                                  COG_BAT_p3))
+  return(list(summary=modelsummary, lsmeans=means.1, group_contrasts=contrasts, 
+              contrasts_ci.95=conf.95, testframe,diff_frame))
+}
+```
+
+Negative binomial mixed model set-up
+```{r}
+NBM.cc<-cc.analysis
+NBM.cc$TotalIADL_r<-8-NBM.cc$TotalIADL
+NBM.cc$TotalIADLbaseline_r<-8-NBM.cc$TotalIADLbaseline
+NBM.cc$SPPBScore_r<-12-NBM.cc$SPPBScore
+NBM.cc$SPPBScorebaseline_r<-12-NBM.cc$SPPBScorebaseline
+
+baseline.IDAL.mean.cc<- cbind(c(6.86,6.96,7.12,6.86,6.96,7.12))
+baseline.IDAL.se.cc<- cbind(c(0.19,0.17,0.19,0.19,0.17,0.19))
+baseline.SPPB.mean.cc<- cbind(c(8.86,8.54,7.67,8.86,8.54,7.67))
+baseline.SPPB.se.cc<- cbind(c(0.31,0.31,0.38,0.31,0.31,0.38))
+```
+
+Negative binomial mixed model function
+```{r}
+nbb.ex.mdl<- function(z,covar1,covar2,reverse,baselinemean1,baseline1.se){
+  model.1 <- glmer.nb(as.formula(paste0(z, "~factor(Group.1)*factor(time) +", covar1, "+", covar2, "+ (1|ID)")), data= NBM.cc)
+  modelsummary <- summary(model.1)
+  marginalmeans <- as.data.frame(ggpredict(model.1, terms = c("Group.1", "time"), type="re"))
+  marginalmeans$predicted_r<- reverse - marginalmeans$predicted
+  marginalmeans$predicted_LL_r<- reverse - marginalmeans$conf.high
+  marginalmeans$predicted_UL_r<- reverse - marginalmeans$conf.low
+  marginalmeans$Group<-marginalmeans$x
+  within.means<-baselinemean1 - marginalmeans$predicted_r
+  within.se<- sqrt(baseline1.se^2+marginalmeans$std.error^2)
+  within.LL<-within.means - within.se*1.96
+  within.UL<-within.means - within.se*1.96
+  within<-as.data.frame(cbind(marginalmeans$Group,within.means,within.se,within.LL,within.UL))
+  library(plyr)
+  within<-rename(within,c("V1" ="Group","V2"="within.diff.means","V3"="within.diff.se",
+                          "V4"="within.diff.LL","V5"="within.diff.UL"))
+  EX_BAT_diff2<-marginalmeans$predicted_r[5] - marginalmeans$predicted_r[1]
+  EX_BAT_diff3<-marginalmeans$predicted_r[6] - marginalmeans$predicted_r[2]
+  COG_BAT_diff2<-marginalmeans$predicted_r[3]-marginalmeans$predicted_r[1]
+  COG_BAT_diff3<-marginalmeans$predicted_r[4]-marginalmeans$predicted_r[2]
+  EX_BAT_diff_se2<-sqrt(marginalmeans$std.error[5]^2+marginalmeans$std.error[1]^2)
+  EX_BAT_diff_se3<-sqrt(marginalmeans$std.error[6]^2+marginalmeans$std.error[2]^2)
+  COG_BAT_diff_se2<-sqrt(marginalmeans$std.error[3]^2+marginalmeans$std.error[1]^2)
+  COG_BAT_diff_se3<-sqrt(marginalmeans$std.error[4]^2+marginalmeans$std.error[2]^2)
+  EX_BAT_diff2_UL<-EX_BAT_diff2 + 1.96*EX_BAT_diff_se2
+  EX_BAT_diff2_LL<-EX_BAT_diff2 - 1.96*EX_BAT_diff_se2
+  COG_BAT_diff2_UL<-COG_BAT_diff2 + 1.96*COG_BAT_diff_se2
+  COG_BAT_diff2_LL<-COG_BAT_diff2 - 1.96*COG_BAT_diff_se2
+  EX_BAT_diff3_UL<-EX_BAT_diff3 + 1.96*EX_BAT_diff_se3
+  EX_BAT_diff3_LL<-EX_BAT_diff3 - 1.96*EX_BAT_diff_se3
+  COG_BAT_diff3_UL<-COG_BAT_diff3 + 1.96*COG_BAT_diff_se3
+  COG_BAT_diff3_LL<-COG_BAT_diff3 - 1.96*COG_BAT_diff_se3
+  EX_BAT_diff2_t<-EX_BAT_diff2/EX_BAT_diff_se2
+  EX_BAT_diff3_t<-EX_BAT_diff3/EX_BAT_diff_se3
+  COG_BAT_diff2_t<-COG_BAT_diff2/COG_BAT_diff_se2
+  COG_BAT_diff3_t<-COG_BAT_diff3/COG_BAT_diff_se3
+  EX_BAT_diff_p2<-2*pnorm(EX_BAT_diff2_t,lower=FALSE)
+  EX_BAT_diff_p3<-2*pnorm(EX_BAT_diff3_t,lower=FALSE)
+  COG_BAT_diff_p2<-2*pnorm(COG_BAT_diff2_t,lower=FALSE)
+  COG_BAT_diff_p3<-2*pnorm(COG_BAT_diff3_t,lower=FALSE)
+  between<-as.data.frame(rbind(EX_BAT_diff2,EX_BAT_diff2_LL,EX_BAT_diff2_UL,EX_BAT_diff_p2, COG_BAT_diff2, COG_BAT_diff2_LL,
+                               COG_BAT_diff2_UL, COG_BAT_diff_p2, EX_BAT_diff3, EX_BAT_diff3_LL, EX_BAT_diff3_UL, 
+                               EX_BAT_diff_p3, COG_BAT_diff3, COG_BAT_diff3_LL, COG_BAT_diff3_UL, COG_BAT_diff_p3))
+  
+  return(list(Means=marginalmeans,Within_Change=within,Between_Change=between))
+}
+```
+
+Primary Outcome: ADAS-Cog Plus
+```{r}
+lmm.ex.md.cc("ADASCOGPLUS", "ADASCOGPLUSbaseline", "BaselineMMSE", baseline.adas.mean.cc, baseline.adas.se.cc)#PRIMARY OUTCOME:ADAS-COG Plus
+```
+
+Secondary Outcome: ADAS-Cog 13
+```{r}
+lmm.ex.md.cc("ADASCObaseline1", "ADASCObaseline1baseline", "BaselineMMSE", baseline.adas11.mean.cc, baseline.adas11.se.cc)#Secondary OUTCOME:ADAS-COG Plus
+```
+
+Secondary Outcome: Stroop INT Ratio
+```{r}
+lmm.ex.md.cc("StroopINTRatio", "StroopINTRatiobaseline", "BaselineMMSE", baseline.Stroop.mean.cc, baseline.Stroop.se.cc)#SECONDARY OUTCOME: Stroop Interference Ratio
+```
+
+Secondary Outcome: Six Minute Walk
+```{r}
+lmm.ex.md.cc("MetersWalked", "MetersWalkedbaseline", "FMTotalScore", baseline.6MWT.mean.cc, baseline.6MWT.se.cc)#SECONDARY OUTCOME: 6 Minute Walk Test
+```
+
+Secondary Outcome: Gait Speed
+```{r}
+lmm.ex.md.cc("GaitSpeed", "GaitSpeedbaseline", "FMTotalScore", baseline.Gait.mean.cc, baseline.Gait.se.cc)#SECONDARY OUTCOME: Gaitspeed
+```
+
+Secondary Outcome: Physical Activity according to the CHAMPS PA Questionnaire
+```{r}
+lmm.ex.md.cc("CHAMPSTotalPA", "CHAMPSTotalPAbaseline", "FMTotalScore", baseline.CHAMPSPA.mean.cc, baseline.CHAMPSPA.se.cc)#SECONDARY OUTCOME: CES-D
+```
+
+Secondary Outcome: IADL (Negative binomial)
+```{r}
+nbb.ex.mdl("TotalIADL_r", "TotalIADLbaseline_r", "FMTotalScore",8,baseline.IDAL.mean.cc,baseline.IDAL.se.cc)#SECONDARY OUTCOME:IADL
+```
+
+Secondary Outcome: SPPB (Negative binomial)
+```{r}
+nbb.ex.mdl("SPPBScore_r", "SPPBScorebaseline_r", "FMTotalScore",12,baseline.SPPB.mean.cc,baseline.SPPB.se.cc)#SECONDARY OUTCOME:SPPB
+```
