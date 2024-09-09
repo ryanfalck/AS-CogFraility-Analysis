@@ -1,0 +1,588 @@
+---
+title: "REVISED FINAL Action Seniors - CogFrailty Analyses (September 9, 2024)"
+author: "RSF"
+date: "2024-01-29"
+output: 
+  html_document:
+    toc: true
+    theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1) Data set-up and management
+
+```{r}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(boot,MASS,readxl,mediation,psych,plyr,sandwich,ggplot2,lme4,lmerTest,rpart,survival,survminer,lsmeans,fmsb, mice, mitools, tableone,mgcv, nlme)
+
+
+setwd("~/Desktop/Manuscripts/Ongoing Projects/ActionSeniors! Cognitive Frailty/")
+data<-read_excel("ActionSeniors_CogsSPPB September 6, 2024.xlsx")#Data#
+
+data$CogFrail<-NA
+data$CogFrail[data$SPPB_1<=9 & data$MoCA_1<26]<-"Yes"
+data$CogFrail[data$SPPB_1>9 | data$MoCA_1>=26]<-"No"
+
+data$exclude<-0
+data$exclude[data$ID==330]<-1
+
+data$Group.1<-NA
+data$Group.1[data$Group==0]<-"Interview"
+data$Group.1[data$Group==1]<-"Otago"
+
+data$Group_r[data$Group==0]<-1
+data$Group_r[data$Group==1]<-0
+
+data$Gender<-NA
+data$Gender[data$Sex==1]<-0
+data$Gender[data$Sex==2]<-1
+
+data$Sex[data$Sex==1]<-"Female"
+data$Sex[data$Sex==2]<-"Male"
+
+#Create long data set
+library(plyr)
+wide<-rename(data,c("Weight_1"="Weightbaseline", "Height_1"="Heightbaseline","BMI_1"="BMIbaseline",
+                    "Falls 12M prior to baseline"="Fallsbeforebaseline", "Total_Exposure"="TotalExposure",
+                    "Total_Falls"="TotalFalls","PPA_1"="PPAbaseline","GDS_1"="GDSbaseline","MoCA_1"="MoCAbaseline",
+                    "Trails_BA_1"="TrailsBAbaseline","DSST_1"="DSSTbaseline","TUG_1"="TUGbaseline",
+                    "SPPB_1"="SPPBbaseline","Gait_Speed_1"="GaitSpeedbaseline","Trails_BA_2"="TrailsBA_2",
+                    "Trails_BA_3"="TrailsBA_3","Group_r"="Group.r","Gait_Speed_2"="GaitSpeed_2","Gait_Speed_3"="GaitSpeed_3",
+                    "Total Falls 6 Months"="TotalFalls6Months", "NIA_Sit_to_Stand_1"="ChairStandbaseline", "NIA_Sit_to_Stand_2"="ChairStand_2","NIA_Sit_to_Stand_3"="ChairStand_3"))
+detach("package:plyr", unload = TRUE)
+
+wide$time<-1
+
+wide2<-wide[c(1,74,69:73,2:12,65,15:18,29,31,66,34,45,47,67,50,61,63,68)]
+data2 <- reshape(as.data.frame(wide2),idvar="ID",varying=c(27:34),direction="long",sep="_")
+CogFrail<- subset(wide2, CogFrail=="Yes")
+No_CogFrail<- subset(wide2, CogFrail=="No")
+```
+
+
+# 2) Compliance data set-up
+Note: All analyses used estimated average compliance for Cognitively Frail participants (45.5%). High compliance is ≥ mean compliance for each group.
+
+```{r}
+setwd("~/Desktop/Manuscripts/Ongoing Projects/ActionSeniors! Cognitive Frailty/")
+compliancedata<-read_excel("AS_compliance_August 24, 2023.xlsx") #Data#
+library(plyr)
+compliancedata2<-rename(compliancedata, c("Month 1"="OEPCOMP_1","Month 2"="OEPCOMP_2","Month 3"="OEPCOMP_3","Month 4"="OEPCOMP_4","Month 5"="OEPCOMP_5","Month 6"="OEPCOMP_6",
+                                          "Month 7"="OEPCOMP_7","Month 8"="OEPCOMP_8","Month 9"="OEPCOMP_9","Month 10"="OEPCOMP_10","Month 11"="OEPCOMP_11","Month 12"="OEPCOMP_12"))
+detach("package:plyr", unload = TRUE)
+
+#Maximize compliance at 100% for each individual month
+compliancedata2$OEPCOMP_1[compliancedata2$OEPCOMP_1>100]<-100
+compliancedata2$OEPCOMP_2[compliancedata2$OEPCOMP_2>100]<-100
+compliancedata2$OEPCOMP_3[compliancedata2$OEPCOMP_3>100]<-100
+compliancedata2$OEPCOMP_4[compliancedata2$OEPCOMP_4>100]<-100
+compliancedata2$OEPCOMP_5[compliancedata2$OEPCOMP_5>100]<-100
+compliancedata2$OEPCOMP_6[compliancedata2$OEPCOMP_6>100]<-100
+compliancedata2$OEPCOMP_7[compliancedata2$OEPCOMP_7>100]<-100
+compliancedata2$OEPCOMP_8[compliancedata2$OEPCOMP_8>100]<-100
+compliancedata2$OEPCOMP_9[compliancedata2$OEPCOMP_9>100]<-100
+compliancedata2$OEPCOMP_10[compliancedata2$OEPCOMP_10>100]<-100
+compliancedata2$OEPCOMP_11[compliancedata2$OEPCOMP_11>100]<-100
+compliancedata2$OEPCOMP_12[compliancedata2$OEPCOMP_12>100]<-100
+
+
+compliancedata2$AverageComply<-(compliancedata2$OEPCOMP_1 + compliancedata2$OEPCOMP_2 + compliancedata2$OEPCOMP_3 + compliancedata2$OEPCOMP_4 + compliancedata2$OEPCOMP_5 + compliancedata2$OEPCOMP_6 + compliancedata2$OEPCOMP_7 + compliancedata2$OEPCOMP_8+ compliancedata2$OEPCOMP_9 + compliancedata2$OEPCOMP_10 + compliancedata2$OEPCOMP_11 + compliancedata2$OEPCOMP_12)/12
+
+wide3<- merge(compliancedata2,wide2, by = "ID")
+
+
+OEP<-subset(wide3, CogFrail=="Yes")
+
+#Determine compliant vs. non compiant for CogFrail and Non-Frail
+describe(OEP$AverageComply) #Average compliance 45.5%
+
+OEP2<-OEP[c(1,14:47)]
+
+OEP2$Compliant<-NA
+OEP2$Compliant[OEP2$AverageComply>=45.5] <- "Yes"
+OEP2$Compliant[OEP2$AverageComply<45.5] <- "No"
+
+OEP3<-OEP2[c(1,4:36,2)]
+OEP4 <- reshape(as.data.frame(OEP3),idvar="ID",varying=c(26:33),direction="long",sep="_") 
+```
+
+# 3) Figure 1 - CONSORT Flow Chart Stratified by Cognitive Frailty Status
+
+```{r}
+#Determine CogFrail Status of Dropouts
+CONSORT<- subset(wide2, ID==128 | ID== 131 | ID==132 | ID==134 | ID==158 | ID==163 | ID==176 | ID==185 | ID==192 | ID==195 | ID==213 | ID==214 | ID==216 | ID==220 | ID==222 | ID==223 |
+                   ID==270 | ID==278 | ID==281 | ID==284 | ID==306 | ID==310 | ID==318 | ID==321 | ID==330 | ID==334 | ID==339 | ID==357 | ID==362 | ID==369 | ID==373 | ID==375 | ID==378 |
+                   ID==385 | ID==395 | ID==398 | ID==407 | ID==408 | ID==412 | ID==413 | ID==424 | ID==426 | ID==427 | ID==428 | ID==432 | ID==438 | ID==455 | ID==461) #All dropouts
+
+CONSORT<-CONSORT[c(1,3,8)]
+MONTHS<- c(13,2,1,0,0,0,13,0,0,13,2,4,0,11,3,5,1,5,2,5,0,0,3,0,0,5,0,4,5,5,5,7,6,1,1,9,1,7,9,2,4,1,7,7,5,11,7,10) #Months in study before drop-out
+CONSORT<-cbind(CONSORT,MONTHS) 
+
+CONSORT$Group[CONSORT$Group==1]<-"INT"
+CONSORT$Group[CONSORT$Group==0]<-"CON"
+
+#Dropouts before 6 months (i.e., Month 7) or after 6 months in study
+CONSORT$Timepoint<-NA
+CONSORT$Timepoint[CONSORT$MONTHS<=7]<-"6 Months or Less"
+CONSORT$Timepoint[CONSORT$MONTHS>7]<-"More than 6 Months"
+
+
+#Sort by Group, Cognitive Frailty Status, and Time of Dropout
+table(CONSORT$Timepoint,CONSORT$Group, CONSORT$CogFrail)
+```
+
+# 4) Table 1 - Participant Characteristics
+
+Descriptive statistics for cognitively frail participants
+```{r}
+cogfrail_vars<-dput(names(wide2[c(10,9,14,20,21,15,23:25)]))
+
+Table1_cogfrail_vars<-CreateTableOne(vars=cogfrail_vars, strata="Group", data=CogFrail)
+print(Table1_cogfrail_vars,contDigits=2,missing=TRUE,quote=TRUE)
+```
+
+Descriptive statistics for non-cognitively frail participants
+```{r}
+Table1_nocogfrail_vars<-CreateTableOne(vars=cogfrail_vars, strata="Group", data=No_CogFrail)
+print(Table1_nocogfrail_vars,contDigits=2,missing=TRUE,quote=TRUE)
+```
+
+
+# 5) Supplementary Material S1 - Differences in baseline characteristics by Cognitive Frailty status
+
+```{r}
+supp1_vars<-dput(names(wide2[c(10,9,14,20,21,15,23:25)]))
+SuppTable1<-CreateTableOne(vars=supp1_vars, strata="CogFrail", data=wide2)
+print(SuppTable1, contDigits=2, missing=TRUE, quote=TRUE)
+```
+
+# 6) Supplementary Material S2 - Differences in monthly compliance 
+
+```{r}
+Supp2graph<-wide3[c(1:13,16)]
+
+#long form
+compliancelong <- reshape(as.data.frame(Supp2graph),idvar="ID",varying=c(2:13),direction="long",sep="_")
+
+#Maximize compliance at 100% (i.e., compliance cannot be greater than 100%, regardless of how many times/month OEP was completed)
+compliancelong$OEPCOMP[compliancelong$OEPCOMP>100]<-100
+
+
+compliancelong$Timepoint<-as.factor(compliancelong$time)
+
+compliancelong.cogfrail<-subset(compliancelong, CogFrail=="Yes") 
+
+comply.2<-lm(OEPCOMP~factor(time), compliancelong.cogfrail)
+emms.2<-as.data.frame(lsmeans(comply.2, ~factor(time)))
+
+Compliance.Graph<- emms.2 %>%
+  ggplot() + geom_line(aes(x=time, y=lsmean)) +
+  labs(x="Months", y="Monthy Adherence %") + ylim(0,100) + scale_x_continuous(breaks=seq(0,13,by=2)) +
+  theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+                     panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+Compliance.Graph
+```
+
+
+# 7) Table 2 - Primary and secondary outcomes at 12 months by treatment group for cognitively frail participants
+
+## 7.1) Primary outcomes (Falls)
+
+Falls Incident Rate Ratio at 12 months
+
+```{r}
+mdl.nb<-glm.nb(TotalFalls~Group.1+scale(Gender,scale=FALSE)+offset(log(TotalExposure/365)),subset(CogFrail,exclude==0)) 
+print(summary(mdl.nb))
+SE<-sqrt(diag(vcovHC(mdl.nb,"HC1")))
+p=2*pnorm(-abs(coef(mdl.nb)/SE))
+print(cbind(coef(mdl.nb),SE,p))
+est<-cbind(Estimate=coef(mdl.nb),LL=coef(mdl.nb)-1.96*SE,UL=coef(mdl.nb)+1.96*SE)
+exp_group<-exp(est)
+print("Use these estimates and LL and UL for the 95% CI");exp_group
+print("Significant effect of intervention on falls risk at 12 months for participants with CogFrailty")     
+```
+
+Falls Incident Rate Ratio at 6 months
+
+```{r}
+mdl2.nb<-glm.nb(TotalFalls6Months~Group.1+scale(Gender,scale=FALSE)+offset(log(TotalExposure/182.5)),subset(CogFrail,exclude==0)) 
+print(summary(mdl2.nb))
+SE<-sqrt(diag(vcovHC(mdl2.nb,"HC1")))
+p=2*pnorm(-abs(coef(mdl2.nb)/SE))
+print(cbind(coef(mdl2.nb),SE,p))
+est<-cbind(Estimate=coef(mdl2.nb),LL=coef(mdl2.nb)-1.96*SE,UL=coef(mdl2.nb)+1.96*SE)
+exp_group<-exp(est)
+print("Use these estimates and LL and UL for the 95% CI");exp_group
+print("Significant effect of intervention on falls risk at 6 months for participants with CogFrailty")     
+```
+
+Differences in total exposure based on group 
+
+```{r}
+exposurelm<-lm(TotalExposure~Group, subset(CogFrail, exclude==0))
+lsmeans(exposurelm, ~Group)
+contrast(lsmeans(exposurelm, ~Group), "trt.vs.ctrl", adj="none")
+```
+
+Differences in the cumulative number of falls by group
+
+```{r}
+setwd("~/Desktop/Manuscripts/Ongoing Projects/ActionSeniors! Cognitive Frailty/")
+Monthly_falls <- read_excel("AS_Monthly falls_Mar 20 2019.xlsx")
+Monthly_falls<-subset(Monthly_falls, ID %in% wide2$ID)
+
+data1c<-cbind(Monthly_falls,wide2$CogFrail,wide2$Group)
+data1c<-subset(data1c,ID!=330)
+
+data1c<-plyr::rename(data1c,c("Month_1_Cumulative"="MonthCumulative_1","Month_2_Cumulative"="MonthCumulative_2","Month_3_Cumulative"="MonthCumulative_3",
+                              "Month_4_Cumulative"="MonthCumulative_4","Month_5_Cumulative"="MonthCumulative_5","Month_6_Cumulative"="MonthCumulative_6",
+                              "Month_7_Cumulative"="MonthCumulative_7","Month_8_Cumulative"="MonthCumulative_8","Month_9_Cumulative"="MonthCumulative_9",
+                              "Month_10_Cumulative"="MonthCumulative_10","Month_11_Cumulative"="MonthCumulative_11","Month_12_Cumulative"="MonthCumulative_12",
+                              "Month_13_Cumulative"="MonthCumulative_13","wide2$CogFrail"="CogFrail","wide2$Group"="Group"))
+data1c_CogFrail_EX<-subset(data1c,Group==1 & CogFrail=="Yes")
+data1c_CogFrail_UC<-subset(data1c,Group==0 & CogFrail=="Yes")
+data1c_NoCogFrail_EX<-subset(data1c,Group==1 & CogFrail=="No")
+data1c_NoCogFrail_UC<-subset(data1c,Group==0 & CogFrail=="No")
+
+print("CogFrail Exercise");apply(data1c_CogFrail_EX[c(2:14)], 2, function(x) length(which(!is.na(x)))) #count people with falls data
+print("CogFrail Usual Care");apply(data1c_CogFrail_UC[c(2:14)], 2, function(x) length(which(!is.na(x)))) #count people with falls data
+print("No CogFrail Exercise");apply(data1c_NoCogFrail_EX[c(2:14)], 2, function(x) length(which(!is.na(x)))) #count people with falls data
+print("No CogFrail Usual Care");apply(data1c_NoCogFrail_UC[c(2:14)], 2, function(x) length(which(!is.na(x)))) #count people with falls data
+
+data1c.stacked<-reshape(data1c,idvar="ID",varying=c(2:27),direction="long",sep="_")
+data1c.stacked$time<-data1c.stacked$time-1
+
+Fallsmeans<-data.frame(aggregate(MonthCumulative~Group*CogFrail+time,data1c.stacked,sum))
+subset(Fallsmeans, CogFrail=="Yes")
+```
+
+Estimated differences in falls per person-year at 12 months
+
+```{r}
+CogFrail$falls_ppy<-CogFrail$TotalFalls/(CogFrail$TotalExposure/365)
+
+fallsppy_lm<-lm(falls_ppy~Group,  subset(CogFrail, exclude==0))
+summary(fallsppy_lm)
+lsmeans(fallsppy_lm, ~Group)
+contrast(lsmeans(fallsppy_lm, ~~Group), "trt.vs.ctrl", adj="none")
+```
+
+Estimated differences in falls per person-year at 6 months
+
+```{r}
+CogFrail$falls_ppy_6mnths<-CogFrail$TotalFalls6Months/(CogFrail$TotalExposure/182.5)
+
+fallsppy_6mnths_lm<-lm(falls_ppy_6mnths~Group,  subset(CogFrail, exclude==0))
+summary(fallsppy_6mnths_lm)
+lsmeans(fallsppy_6mnths_lm, ~Group)
+contrast(lsmeans(fallsppy_6mnths_lm, ~~Group), "trt.vs.ctrl", adj="none")
+```
+
+Differences in exposure time
+
+```{r}
+expopsure_lm<-lm(TotalExposure~Group,  subset(CogFrail, exclude==0))
+summary(expopsure_lm)
+lsmeans(expopsure_lm, ~Group)
+contrast(lsmeans(expopsure_lm, ~~Group), "trt.vs.ctrl", adj="none")
+```
+
+## 7.2) Secondary outcomes (Physical Function and Cognition)
+
+Set-up for linear mixed models
+```{r}
+CogFrail_long <- reshape(as.data.frame(CogFrail),idvar="ID",varying=27:34,direction="long",sep="_")
+CogFrail_long$timefactor<-as.factor(CogFrail_long$time)
+```
+
+
+SPPB
+
+```{r}
+SPPB_lm<-lmer(SPPB~Group.1*timefactor + scale(Gender,scale=FALSE) + SPPBbaseline + (1|ID),  subset(CogFrail_long, exclude==0))
+anova(SPPB_lm)
+lsmeans(SPPB_lm, ~Group.1|timefactor)
+contrast(lsmeans(SPPB_lm, ~Group.1|timefactor), "trt.vs.ctrl", adj="none")
+confint(contrast(lsmeans(SPPB_lm, ~Group.1|timefactor), "trt.vs.ctrl", adj="none"))
+print("No significant effects")
+```
+
+Gait Speed
+
+```{r}
+GS_lm<-lmer(GaitSpeed~Group.1*timefactor + scale(Gender,scale=FALSE) + GaitSpeedbaseline + (1|ID),  subset(CogFrail_long, exclude==0))
+anova(GS_lm)
+lsmeans(GS_lm, ~Group.1|timefactor)
+contrast(lsmeans(GS_lm, ~Group.1|timefactor), "trt.vs.ctrl", adj="none")
+confint(contrast(lsmeans(GS_lm, ~Group.1|timefactor), "trt.vs.ctrl", adj="none"))
+print("No significant effects for CogFrail participants")
+```
+
+MoCA
+
+```{r}
+emm_options(opt.digits = FALSE)
+
+MoCA_lm<-lmer(MoCA~Group.1*timefactor + scale(Gender,scale=FALSE) + MoCAbaseline + (1|ID),  subset(CogFrail_long, exclude==0))
+anova(MoCA_lm)
+lsmeans(MoCA_lm, ~Group.1|timefactor)
+contrast(lsmeans(MoCA_lm, ~Group.1|timefactor), "trt.vs.ctrl", adj="none")
+confint(contrast(lsmeans(MoCA_lm, ~Group.1|timefactor), "trt.vs.ctrl", adj="none"))
+print("No significant differences at 12 months")
+```
+
+# 8) Figure 2 - Accumulation of falls by treatment group for cognitively frail participants
+
+```{r}
+Fallsmeans$GroupCogFrail<-NA
+Fallsmeans$GroupCogFrail[Fallsmeans$Group==0 & Fallsmeans$CogFrail=="Yes"]<-"Usual Care Group"
+Fallsmeans$GroupCogFrail[Fallsmeans$Group==1 & Fallsmeans$CogFrail=="Yes"]<-"Exercise Group"
+
+Fallsmeans.cogfrail<-subset(Fallsmeans, CogFrail=="Yes")
+
+Cumulativefalls.Graph<- Fallsmeans.cogfrail %>%
+  ggplot() + geom_line(aes(x=time, y=MonthCumulative, color=GroupCogFrail)) +
+  labs(x="Months", y="Cumulative number of falls") + labs(color="Intervention Group") +
+  scale_x_continuous(breaks=seq(0,13,by=1)) + scale_y_continuous(breaks=seq(0,300,by=50))+
+  theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+                     panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+Cumulativefalls.Graph
+```
+
+# 9) Table 3 - Primary and secondary outcomes at 12 months in exercise group based on cognitive frailty status and compliance to the intervention 
+
+
+## 9.1) Primary outcomes (Falls)
+
+Falls Incident Rate Ratio at 12 months (Cognitively Frail Participants)
+
+```{r}
+mdl.nb<-glm.nb(TotalFalls~Compliant+scale(Gender,scale=FALSE)+offset(log(TotalExposure/365)),subset(OEP2, exclude==0)) 
+print(summary(mdl.nb))
+SE<-sqrt(diag(vcovHC(mdl.nb,"HC1")))
+p=2*pnorm(-abs(coef(mdl.nb)/SE))
+print(cbind(coef(mdl.nb),SE,p))
+est<-cbind(Estimate=coef(mdl.nb),LL=coef(mdl.nb)-1.96*SE,UL=coef(mdl.nb)+1.96*SE)
+exp_group<-exp(est)
+print("Use these estimates and LL and UL for the 95% CI");exp_group
+print("No significant effect of compliance for CogFrail participants") 
+```
+
+Falls Incident Rate Ratio at 6 months (Cognitively Frail Participants)
+
+```{r}
+mdl.nb<-glm.nb(TotalFalls6Months~Compliant+scale(Gender,scale=FALSE)+offset(log(TotalExposure/182.5)),subset(OEP2, exclude==0)) 
+print(summary(mdl.nb))
+SE<-sqrt(diag(vcovHC(mdl.nb,"HC1")))
+p=2*pnorm(-abs(coef(mdl.nb)/SE))
+print(cbind(coef(mdl.nb),SE,p))
+est<-cbind(Estimate=coef(mdl.nb),LL=coef(mdl.nb)-1.96*SE,UL=coef(mdl.nb)+1.96*SE)
+exp_group<-exp(est)
+print("Use these estimates and LL and UL for the 95% CI");exp_group
+print("No significant effect of compliance for CogFrail participants") 
+```
+
+
+Falls Per Person-Year at 12 months (Cognitively Frail Participants)
+
+```{r}
+OEP2$falls_ppy<-OEP2$TotalFalls/(OEP2$TotalExposure/365)
+
+fallsppy_comply<-lm(falls_ppy~AverageComply, OEP2)
+summary(fallsppy_comply)
+lsmeans(fallsppy_comply, ~AverageComply)
+contrast(lsmeans(fallsppy_comply, ~~AverageComply), "trt.vs.ctrl", adj="none")
+```
+
+Falls Per Person-Year at 6 months (Cognitively Frail Participants)
+
+```{r}
+OEP2$falls_ppy_6mnths<-OEP2$TotalFalls6Months/(OEP2$TotalExposure/182.5)
+OEP2$Avgcomply <- as.numeric(OEP2$AverageComply)
+
+
+fallsppy_comply<-lm(falls_ppy_6mnths~Compliant, OEP2)
+summary(fallsppy_comply)
+lsmeans(fallsppy_comply, ~Compliant)
+contrast(lsmeans(fallsppy_comply, ~~Compliant), "trt.vs.ctrl", adj="none")
+```
+
+## 9.2) Secondary outcomes (physical and cognitive function)
+
+SPPB
+
+```{r}
+SPPB_lm<-lmer(SPPB~Compliant*factor(time) + scale(Gender,scale=FALSE) + SPPBbaseline + (1|ID), subset(OEP4, exclude == 0))
+anova(SPPB_lm)
+lsmeans(SPPB_lm, ~Compliant|factor(time))
+contrast(lsmeans(SPPB_lm, ~Compliant|factor(time)), "trt.vs.ctrl", adj="none")
+confint(contrast(lsmeans(SPPB_lm, ~Compliant|factor(time)), "trt.vs.ctrl", adj="none"))
+print("Higher compliance among CogFrail participants was associated with better SPPB score at 12 months")
+```
+
+Gait Speed
+
+```{r}
+GS_lm<-lmer(GaitSpeed~Compliant*factor(time) + scale(Gender,scale=FALSE) + GaitSpeedbaseline + (1|ID), subset(OEP4, exclude == 0))
+anova(GS_lm)
+lsmeans(GS_lm, ~Compliant|factor(time))
+contrast(lsmeans(GS_lm, ~Compliant|factor(time)), "trt.vs.ctrl", adj="none")
+confint(contrast(lsmeans(GS_lm, ~Compliant|factor(time)), "trt.vs.ctrl", adj="none"))
+print("No significant effects")
+```
+
+MoCA
+
+```{r}
+MoCA_lm<-lmer(MoCA~Compliant*factor(time) + scale(Gender,scale=FALSE) + MoCAbaseline + (1|ID), subset(OEP4, exclude==0))
+anova(MoCA_lm)
+lsmeans(MoCA_lm, ~Compliant|factor(time))
+contrast(lsmeans(MoCA_lm, ~Compliant|factor(time)), "trt.vs.ctrl", adj="none")
+confint(contrast(lsmeans(MoCA_lm, ~Compliant|factor(time)), "trt.vs.ctrl", adj="none"))
+print("No significant differences")
+```
+
+
+
+# 10) Dose-response effect of adherence
+
+## 10.1) Total Falls
+```{r}
+doseresponse.falls <- gam(TotalFalls ~ s(AverageComply), family = nb(),
+              data = subset(OEP2, exclude == 0))
+
+# Print summary of the GAM
+summary(doseresponse.falls)
+
+# Plot the dose-response curve
+plot(OEP2$AverageComply, OEP2$TotalFalls, pch = 16) +
+lines(OEP2$AverageComply, predict(doseresponse.falls, type = "response"), col = "purple")
+```
+
+## 10.2) Falls per person year
+```{r}
+doseresponse.fallsppy <- gam(falls_ppy ~ s(AverageComply), family = gaussian(),
+              data = subset(OEP2, exclude == 0))
+
+# Print summary of the GAM
+summary(doseresponse.fallsppy)
+
+# Plot the dose-response curve
+plot(OEP2$AverageComply, OEP2$falls_ppy, pch = 16) +
+lines(OEP2$AverageComply, predict(doseresponse.fallsppy, type = "response"), col = "purple")
+```
+
+## 10.3) MoCA
+```{r}
+doseresponse.MoCA <- lmer(MoCA~AverageComply + MoCAbaseline + (1|ID), data = OEP4)
+
+# Print summary of the GAM
+summary(doseresponse.MoCA)
+
+# Plot the dose-response curve
+doseresponse.MoCA.data <- expand.grid(
+  AverageComply = seq(min(OEP4$AverageComply), max(OEP4$AverageComply), length.out = 100),
+  MoCAbaseline = seq(min(OEP4$MoCAbaseline), max(OEP4$MoCAbaseline), length.out = 100)
+)
+
+  
+predicted_response.MoCA <- predict(doseresponse.MoCA, newdata = doseresponse.MoCA.data, re.form = NA)
+combined_data.MoCA <- data.frame(Dose = c(OEP4$AverageComply, doseresponse.MoCA.data$AverageComply),
+                                 MoCAbaseline = c(OEP4$MoCAbaseline, doseresponse.MoCA.data$MoCAbaseline),
+                                 Response = c(OEP4$MoCA, predicted_response.MoCA),
+                                 Type = rep(c("Observed", "Fitted"), each = nrow(df)))
+
+ggplot() +
+  geom_smooth(data = subset(combined_data.MoCA, Type == "Fitted"), aes(Dose, Response)) +
+  labs(x = "Average Compliance (%)",
+       y = "MoCA Score") +
+  theme_minimal()
+```
+
+
+## 10.4) SPPB
+```{r}
+doseresponse.SPPB <- lmer(SPPB~AverageComply + SPPBbaseline + (1|ID), data = OEP4)
+
+# Print summary of the GAM
+summary(doseresponse.SPPB)
+
+# Plot the dose-response curve
+doseresponse.SPPB.data <- expand.grid(
+  AverageComply = seq(min(OEP4$AverageComply), max(OEP4$AverageComply), length.out = 100),
+  SPPBbaseline = seq(min(OEP4$SPPBbaseline), max(OEP4$SPPBbaseline), length.out = 100)
+)
+
+  
+predicted_response.SPPB <- predict(doseresponse.SPPB, newdata = doseresponse.SPPB.data, re.form = NA)
+combined_data.SPPB <- data.frame(Dose = c(OEP4$AverageComply, doseresponse.SPPB.data$AverageComply),
+                                 MoCAbaseline = c(OEP4$SPPBbaseline, doseresponse.SPPB.data$SPPBbaseline),
+                                 Response = c(OEP4$SPPB, predicted_response.SPPB),
+                                 Type = rep(c("Observed", "Fitted"), each = nrow(df)))
+
+ggplot() +
+  geom_smooth(data = subset(combined_data.SPPB, Type == "Fitted"), aes(Dose, Response)) +
+  labs(x = "Average Compliance (%)",
+       y = "SPPB Score") +
+  theme_minimal()
+```
+
+# 11) Post-hoc analyses
+
+## 11.1) Differences between groups in 5 sit-to-stands and absolute values of walking speed
+
+SPPB measured 5 sit-to-stand test between EX and usual care
+```{r}
+posthoc<-subset(CogFrail_long, exclude==0)
+
+chair_lm<-lmer(ChairStand~Group.1*timefactor + scale(Gender,scale=FALSE) + ChairStandbaseline + (1|ID),  data = posthoc)
+anova(chair_lm)
+emmeans(chair_lm, ~Group.1|timefactor)
+contrast(lsmeans(chair_lm, ~Group.1|timefactor), "trt.vs.ctrl", adj="none")
+confint(contrast(lsmeans(chair_lm, ~Group.1|timefactor), "trt.vs.ctrl", adj="none"))
+print("No significant effects")
+```
+
+Absolute Walking speed between EX and usual care
+```{r}
+posthoc$Walkingspeed<-posthoc$GaitSpeed*4
+posthoc$Walkingspeedbaseline<-posthoc$GaitSpeedbaseline*4
+
+Walk_lm<-lmer(Walkingspeed~Group.1*timefactor + scale(Gender,scale=FALSE) + Walkingspeedbaseline + (1|ID),  data = posthoc)
+anova(Walk_lm)
+emmeans(Walk_lm, ~Group.1|timefactor)
+contrast(lsmeans(Walk_lm, ~Group.1|timefactor), "trt.vs.ctrl", adj="none")
+confint(contrast(lsmeans(Walk_lm, ~Group.1|timefactor), "trt.vs.ctrl", adj="none"))
+print("No significant effects")
+```
+
+
+## 11.2) Adherence effects for 5 sit-to-stands
+
+SPPB 5 chair stands
+```{r}
+posthoc.2<-subset(OEP4, exclude == 0)
+chairstand_lm.2<-lmer(ChairStand~Compliant*factor(time) + scale(Gender,scale=FALSE) + ChairStandbaseline + (1|ID), posthoc.2)
+anova(chairstand_lm.2)
+lsmeans(chairstand_lm.2, ~Compliant|factor(time))
+contrast(lsmeans(chairstand_lm.2, ~Compliant|factor(time)), "trt.vs.ctrl", adj="none")
+confint(contrast(lsmeans(chairstand_lm.2, ~Compliant|factor(time)), "trt.vs.ctrl", adj="none"))
+print("No significant effects")
+```
+
+Absolute walking speed
+```{r}
+posthoc.2$Walkingspeed<-posthoc.2$GaitSpeed*4
+posthoc.2$Walkingspeedbaseline<-posthoc.2$GaitSpeedbaseline*4
+
+
+Walk_lm.2<-lmer(Walkingspeed~Compliant*factor(time) + scale(Gender,scale=FALSE) + Walkingspeedbaseline + (1|ID), posthoc.2)
+anova(Walk_lm.2)
+lsmeans(Walk_lm.2, ~Compliant|factor(time))
+contrast(lsmeans(Walk_lm.2, ~Compliant|factor(time)), "trt.vs.ctrl", adj="none")
+confint(contrast(lsmeans(Walk_lm.2, ~Compliant|factor(time)), "trt.vs.ctrl", adj="none"))
+print("No significiant effects")
+```
